@@ -4,6 +4,9 @@
 - CRV only, scrap only, or both?
 - Current payout rates?
 - Do rates change daily?
+- Who is allowed to change material and rate settings?
+- Should rate changes require a second-person approval or manager PIN?
+- Should old rate metadata ever be locked after first use?
 - Do they need scale integration?
 - What scale model?
 - Do they use a cash drawer?
@@ -22,4 +25,3 @@
 - Who is allowed to void or correct a transaction?
 - What data must be visible to the customer on screen before payout?
 - What daily closeout process is used now?
-

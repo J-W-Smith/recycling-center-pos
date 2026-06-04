@@ -12,6 +12,8 @@ Configurable admin-defined material/input types.
 - `default_rate_cents_per_unit`
 - `report_grouping`
 - `active`
+- `sort_order`
+- `notes`
 
 ## `rates`
 
@@ -23,6 +25,7 @@ Effective-dated rate records.
 - `effective_from`
 - `effective_to`
 - `notes`
+- `active`
 
 ## `transactions`
 
@@ -74,4 +77,6 @@ Immutable receipt/internal copy snapshots.
 - Store currency as integer cents.
 - Store weights and quantities as Decimal-compatible text.
 - Store receipt snapshots at transaction time.
-
+- Keep inactive materials and old rates for historical reporting.
+- Use effective dates so price changes do not require code changes.
+- Prevent overlapping active rate periods for the same material.

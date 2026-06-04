@@ -24,3 +24,10 @@ def format_cents(cents: int) -> str:
     cents = abs(cents)
     return f"{sign}${cents // 100}.{cents % 100:02d}"
 
+
+def dollars_to_cents(value: str | Decimal) -> int:
+    if isinstance(value, str):
+        value = value.replace("$", "").replace(",", "").strip()
+    dollars = decimal_from_user(value)
+    cents = (dollars * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return int(cents)

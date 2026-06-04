@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from decimal import Decimal
 
-from app.db import create_transaction, fetch_transaction, get_material_by_key
+from app.db import add_rate, create_transaction, fetch_transaction, get_material_by_key
 from app.models import LineItemInput, TransactionInput
 from app.receipt import receipt_text_to_html
 
@@ -23,16 +23,14 @@ def test_receipt_snapshot_preserved_after_rate_change(conn: sqlite3.Connection) 
     )
     before = fetch_transaction(conn, tx_id)["receipt_snapshot_text"]
 
-    with conn:
-        conn.execute(
-            """
-            INSERT INTO rates (
-                material_type_id, rate_kind, rate_cents_per_unit, effective_from, notes
-            )
-            VALUES (?, 'count_large', 999, '2026-06-05', 'test future rate')
-            """,
-            (material.id,),
-        )
+    add_rate(
+        conn,
+        material_type_id=material.id,
+        rate_cents_per_unit=999,
+        effective_from="2026-06-05",
+        notes="test future rate",
+        replace_current=True,
+    )
 
     after = fetch_transaction(conn, tx_id)["receipt_snapshot_text"]
     receipt_records = conn.execute(
@@ -47,4 +45,3 @@ def test_receipt_snapshot_preserved_after_rate_change(conn: sqlite3.Connection) 
 def test_receipt_html_escapes_snapshot_text() -> None:
     html = receipt_text_to_html("Manual <review> & print")
     assert "Manual &lt;review&gt; &amp; print" in html
-

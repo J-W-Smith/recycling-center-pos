@@ -14,6 +14,7 @@ SEED_MATERIALS = [
         "report_grouping": "CRV Aluminum",
         "rate_kind": "weight",
         "notes": "Planning placeholder. Verify current certified CRV per-pound rate.",
+        "sort_order": 10,
     },
     {
         "key": "plastic_crv_weight",
@@ -25,6 +26,7 @@ SEED_MATERIALS = [
         "report_grouping": "CRV Plastic",
         "rate_kind": "weight",
         "notes": "Planning placeholder. Verify current certified CRV per-pound rate.",
+        "sort_order": 20,
     },
     {
         "key": "glass_crv_weight",
@@ -36,6 +38,7 @@ SEED_MATERIALS = [
         "report_grouping": "CRV Glass",
         "rate_kind": "weight",
         "notes": "Planning placeholder. Verify current certified CRV per-pound rate.",
+        "sort_order": 30,
     },
     {
         "key": "aluminum_crv_count_small",
@@ -47,6 +50,7 @@ SEED_MATERIALS = [
         "report_grouping": "CRV Aluminum",
         "rate_kind": "count_small",
         "notes": "Initial CRV assumption: containers less than 24 ounces.",
+        "sort_order": 40,
     },
     {
         "key": "plastic_crv_count_small",
@@ -58,6 +62,7 @@ SEED_MATERIALS = [
         "report_grouping": "CRV Plastic",
         "rate_kind": "count_small",
         "notes": "Initial CRV assumption: containers less than 24 ounces.",
+        "sort_order": 50,
     },
     {
         "key": "glass_crv_count_small",
@@ -69,6 +74,7 @@ SEED_MATERIALS = [
         "report_grouping": "CRV Glass",
         "rate_kind": "count_small",
         "notes": "Initial CRV assumption: containers less than 24 ounces.",
+        "sort_order": 60,
     },
     {
         "key": "large_crv_count",
@@ -80,6 +86,7 @@ SEED_MATERIALS = [
         "report_grouping": "CRV Large Containers",
         "rate_kind": "count_large",
         "notes": "Initial CRV assumption: containers 24 ounces or larger.",
+        "sort_order": 70,
     },
     {
         "key": "wine_liquor_box_pouch_count",
@@ -91,6 +98,7 @@ SEED_MATERIALS = [
         "report_grouping": "CRV Wine/Liquor",
         "rate_kind": "count_wine_liquor_box_pouch",
         "notes": "Initial CRV assumption for eligible boxes, bladders, or pouches.",
+        "sort_order": 80,
     },
     {
         "key": "scrap_aluminum_weight",
@@ -102,6 +110,7 @@ SEED_MATERIALS = [
         "report_grouping": "Non-CRV Scrap Aluminum",
         "rate_kind": "weight",
         "notes": "Planning placeholder. Replace with shop rate.",
+        "sort_order": 90,
     },
     {
         "key": "custom_manual_payout",
@@ -113,6 +122,7 @@ SEED_MATERIALS = [
         "report_grouping": "Manual Adjustments",
         "rate_kind": "manual",
         "notes": "Manual payout records should require operator notes in production.",
+        "sort_order": 100,
     },
 ]
 
@@ -124,17 +134,10 @@ def seed_materials(conn: sqlite3.Connection, effective_from: str = "2026-01-01")
                 """
                 INSERT INTO material_types (
                     key, display_name, category, crv_eligible, unit_type,
-                    default_rate_cents_per_unit, report_grouping, active
+                    default_rate_cents_per_unit, report_grouping, active, sort_order, notes
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-                ON CONFLICT(key) DO UPDATE SET
-                    display_name = excluded.display_name,
-                    category = excluded.category,
-                    crv_eligible = excluded.crv_eligible,
-                    unit_type = excluded.unit_type,
-                    default_rate_cents_per_unit = excluded.default_rate_cents_per_unit,
-                    report_grouping = excluded.report_grouping,
-                    active = excluded.active
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                ON CONFLICT(key) DO NOTHING
                 """,
                 (
                     item["key"],
@@ -144,6 +147,8 @@ def seed_materials(conn: sqlite3.Connection, effective_from: str = "2026-01-01")
                     item["unit_type"],
                     item["default_rate_cents_per_unit"],
                     item["report_grouping"],
+                    item["sort_order"],
+                    item["notes"],
                 ),
             )
             material_id = conn.execute(
@@ -161,9 +166,9 @@ def seed_materials(conn: sqlite3.Connection, effective_from: str = "2026-01-01")
                     """
                     INSERT INTO rates (
                         material_type_id, rate_kind, rate_cents_per_unit,
-                        effective_from, effective_to, notes
+                        effective_from, effective_to, notes, active
                     )
-                    VALUES (?, ?, ?, ?, NULL, ?)
+                    VALUES (?, ?, ?, ?, NULL, ?, 1)
                     """,
                     (
                         material_id,
@@ -173,4 +178,3 @@ def seed_materials(conn: sqlite3.Connection, effective_from: str = "2026-01-01")
                         item["notes"],
                     ),
                 )
-

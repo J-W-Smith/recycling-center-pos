@@ -7,9 +7,20 @@ from decimal import InvalidOperation
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-from app.db import create_transaction, fetch_transaction, list_materials
+from app.db import (
+    add_rate,
+    create_material_type,
+    create_transaction,
+    fetch_transaction,
+    get_current_rate,
+    list_materials,
+    list_rates,
+    set_material_active,
+    update_material_type,
+    update_rate_metadata,
+)
 from app.models import LineItemInput, MaterialType, TransactionInput
-from app.pricing import decimal_from_user, format_cents
+from app.pricing import dollars_to_cents, decimal_from_user, format_cents
 from app.reports import export_daily_report_csv, generate_daily_report, render_daily_report_html
 
 
@@ -20,11 +31,13 @@ class RecyclingPOSApp(tk.Tk):
         self.title("Recycling Center POS MVP")
         self.geometry("980x680")
         self.configure(background="#c0c0c0")
-        self.materials = list_materials(conn)
-        self.material_by_label = {self._label(material): material for material in self.materials}
-        self.material_by_id = {material.id: material for material in self.materials}
+        self.materials: list[MaterialType] = []
+        self.material_by_label: dict[str, MaterialType] = {}
+        self.material_by_id: dict[int, MaterialType] = {}
         self.pending_items: list[LineItemInput] = []
+        self.material_combo: ttk.Combobox | None = None
         self._build_style()
+        self.refresh_material_choices()
         self._build()
 
     def _build_style(self) -> None:
@@ -50,14 +63,14 @@ class RecyclingPOSApp(tk.Tk):
         entry_panel.pack(fill="x", pady=8)
         ttk.Label(entry_panel, text="Material").grid(row=0, column=0, sticky="w")
         self.material_var = tk.StringVar(value=next(iter(self.material_by_label), ""))
-        material_combo = ttk.Combobox(
+        self.material_combo = ttk.Combobox(
             entry_panel,
             textvariable=self.material_var,
             values=list(self.material_by_label),
             width=48,
             state="readonly",
         )
-        material_combo.grid(row=1, column=0, sticky="we", padx=(0, 8))
+        self.material_combo.grid(row=1, column=0, sticky="we", padx=(0, 8))
 
         ttk.Label(entry_panel, text="Quantity").grid(row=0, column=1, sticky="w")
         self.quantity_var = tk.StringVar(value="1")
@@ -122,6 +135,9 @@ class RecyclingPOSApp(tk.Tk):
         ttk.Button(actions, text="Export Today CSV", command=self.export_daily_csv).pack(
             side="left", padx=(0, 8)
         )
+        ttk.Button(actions, text="Admin Settings", command=self.open_admin_settings).pack(
+            side="left", padx=(0, 8)
+        )
         self.total_var = tk.StringVar(value="Pending total: $0.00")
         ttk.Label(actions, textvariable=self.total_var, style="Header.TLabel").pack(side="right")
 
@@ -135,6 +151,15 @@ class RecyclingPOSApp(tk.Tk):
     def _label(self, material: MaterialType) -> str:
         crv = "CRV" if material.crv_eligible else "non-CRV"
         return f"{material.display_name} ({crv}, {material.unit_type})"
+
+    def refresh_material_choices(self) -> None:
+        self.materials = list_materials(self.conn, active_only=True)
+        self.material_by_label = {self._label(material): material for material in self.materials}
+        self.material_by_id = {material.id: material for material in self.materials}
+        if self.material_combo is not None:
+            labels = list(self.material_by_label)
+            self.material_combo.configure(values=labels)
+            self.material_var.set(labels[0] if labels else "")
 
     def add_line_item(self) -> None:
         material = self.material_by_label.get(self.material_var.get())
@@ -155,15 +180,11 @@ class RecyclingPOSApp(tk.Tk):
             description=self.description_var.get(),
         )
         self.pending_items.append(item)
-        rate_row = self.conn.execute(
-            """
-            SELECT rate_cents_per_unit FROM rates
-            WHERE material_type_id = ? AND effective_to IS NULL
-            ORDER BY effective_from DESC, id DESC LIMIT 1
-            """,
-            (material.id,),
-        ).fetchone()
-        rate_cents = int(rate_row["rate_cents_per_unit"]) if rate_row else 0
+        try:
+            rate_cents = get_current_rate(self.conn, material.id, date.today().isoformat())
+        except ValueError as exc:
+            messagebox.showerror("Missing current rate", str(exc))
+            return
         self.tree.insert(
             "",
             "end",
@@ -181,33 +202,32 @@ class RecyclingPOSApp(tk.Tk):
         total = 0
         for item in self.pending_items:
             material = self.material_by_id[item.material_type_id]
-            row = self.conn.execute(
-                """
-                SELECT rate_cents_per_unit FROM rates
-                WHERE material_type_id = ? AND effective_to IS NULL
-                ORDER BY effective_from DESC, id DESC LIMIT 1
-                """,
-                (material.id,),
-            ).fetchone()
-            if row:
-                from app.pricing import cents_for_quantity
+            try:
+                rate_cents = get_current_rate(self.conn, material.id, date.today().isoformat())
+            except ValueError:
+                continue
+            from app.pricing import cents_for_quantity
 
-                total += cents_for_quantity(item.quantity, int(row["rate_cents_per_unit"]))
+            total += cents_for_quantity(item.quantity, rate_cents)
         self.total_var.set(f"Pending total: {format_cents(total)}")
 
     def save_transaction(self) -> None:
         if not self.pending_items:
             messagebox.showerror("No line items", "Add at least one line item.")
             return
-        tx_id = create_transaction(
-            self.conn,
-            TransactionInput(
-                line_items=self.pending_items,
-                operator_initials=self.operator_var.get(),
-                payout_method=self.payout_var.get(),
-                notes=self.notes_var.get(),
-            ),
-        )
+        try:
+            tx_id = create_transaction(
+                self.conn,
+                TransactionInput(
+                    line_items=self.pending_items,
+                    operator_initials=self.operator_var.get(),
+                    payout_method=self.payout_var.get(),
+                    notes=self.notes_var.get(),
+                ),
+            )
+        except ValueError as exc:
+            messagebox.showerror("Transaction validation", str(exc))
+            return
         tx = fetch_transaction(self.conn, tx_id)
         self.pending_items.clear()
         for item in self.tree.get_children():
@@ -228,3 +248,364 @@ class RecyclingPOSApp(tk.Tk):
             report, Path("data/exports") / f"daily-report-{date.today().isoformat()}.csv"
         )
         messagebox.showinfo("CSV exported", f"Exported {path}")
+
+    def open_admin_settings(self) -> None:
+        AdminSettingsWindow(self, self.conn)
+
+
+class AdminSettingsWindow(tk.Toplevel):
+    def __init__(self, app: RecyclingPOSApp, conn: sqlite3.Connection) -> None:
+        super().__init__(app)
+        self.app = app
+        self.conn = conn
+        self.title("Admin Settings")
+        self.geometry("980x620")
+        self.configure(background="#c0c0c0")
+        self.selected_material_id: int | None = None
+        self.selected_rate_id: int | None = None
+        self.material_rate_labels: dict[str, MaterialType] = {}
+        self._build()
+        self.refresh_materials()
+        self.refresh_rates()
+
+    def _build(self) -> None:
+        tabs = ttk.Notebook(self)
+        tabs.pack(fill="both", expand=True, padx=8, pady=8)
+        self.material_tab = ttk.Frame(tabs, padding=8)
+        self.rate_tab = ttk.Frame(tabs, padding=8)
+        tabs.add(self.material_tab, text="Materials")
+        tabs.add(self.rate_tab, text="Rates")
+        self._build_material_tab()
+        self._build_rate_tab()
+
+    def _build_material_tab(self) -> None:
+        self.material_tree = ttk.Treeview(
+            self.material_tab,
+            columns=("id", "name", "category", "group", "crv", "unit", "active", "sort"),
+            show="headings",
+            height=10,
+        )
+        headings = (
+            ("id", "ID", 45),
+            ("name", "Display Name", 230),
+            ("category", "Category", 140),
+            ("group", "Report Group", 150),
+            ("crv", "CRV", 55),
+            ("unit", "Unit", 75),
+            ("active", "Active", 65),
+            ("sort", "Sort", 55),
+        )
+        for col, label, width in headings:
+            self.material_tree.heading(col, text=label)
+            self.material_tree.column(col, width=width, anchor="w")
+        self.material_tree.pack(fill="x", pady=(0, 8))
+        self.material_tree.bind("<<TreeviewSelect>>", self.on_material_select)
+
+        form = ttk.Frame(self.material_tab)
+        form.pack(fill="x")
+        self.material_name = tk.StringVar()
+        self.material_category = tk.StringVar()
+        self.material_group = tk.StringVar()
+        self.material_crv = tk.BooleanVar(value=False)
+        self.material_unit = tk.StringVar(value="weight")
+        self.material_active = tk.BooleanVar(value=True)
+        self.material_sort = tk.StringVar(value="0")
+        self.material_notes = tk.StringVar()
+        fields = [
+            ("Display name", self.material_name, 0, 0, 34),
+            ("Category", self.material_category, 0, 1, 24),
+            ("Report group", self.material_group, 0, 2, 24),
+            ("Sort order", self.material_sort, 0, 3, 8),
+            ("Notes", self.material_notes, 2, 0, 80),
+        ]
+        for label, variable, row, col, width in fields:
+            ttk.Label(form, text=label).grid(row=row, column=col, sticky="w", padx=(0, 8))
+            ttk.Entry(form, textvariable=variable, width=width).grid(
+                row=row + 1, column=col, sticky="we", padx=(0, 8), pady=(0, 6)
+            )
+        ttk.Label(form, text="Unit type").grid(row=0, column=4, sticky="w")
+        ttk.Combobox(
+            form,
+            textvariable=self.material_unit,
+            values=["weight", "count", "manual"],
+            state="readonly",
+            width=10,
+        ).grid(row=1, column=4, sticky="w", padx=(0, 8), pady=(0, 6))
+        ttk.Checkbutton(form, text="CRV eligible", variable=self.material_crv).grid(
+            row=2, column=3, sticky="w"
+        )
+        ttk.Checkbutton(form, text="Active", variable=self.material_active).grid(
+            row=2, column=4, sticky="w"
+        )
+        form.columnconfigure(2, weight=1)
+
+        buttons = ttk.Frame(self.material_tab)
+        buttons.pack(fill="x", pady=(8, 0))
+        ttk.Button(buttons, text="New", command=self.clear_material_form).pack(side="left")
+        ttk.Button(buttons, text="Save Material", command=self.save_material).pack(
+            side="left", padx=(8, 0)
+        )
+        ttk.Button(buttons, text="Toggle Active", command=self.toggle_material_active).pack(
+            side="left", padx=(8, 0)
+        )
+
+    def _build_rate_tab(self) -> None:
+        self.rate_tree = ttk.Treeview(
+            self.rate_tab,
+            columns=("id", "material", "rate", "unit", "from", "to", "active", "notes"),
+            show="headings",
+            height=10,
+        )
+        headings = (
+            ("id", "ID", 45),
+            ("material", "Material", 260),
+            ("rate", "Rate", 80),
+            ("unit", "Unit", 75),
+            ("from", "Start", 95),
+            ("to", "End", 95),
+            ("active", "Active", 65),
+            ("notes", "Notes", 250),
+        )
+        for col, label, width in headings:
+            self.rate_tree.heading(col, text=label)
+            self.rate_tree.column(col, width=width, anchor="w")
+        self.rate_tree.pack(fill="x", pady=(0, 8))
+        self.rate_tree.bind("<<TreeviewSelect>>", self.on_rate_select)
+
+        form = ttk.Frame(self.rate_tab)
+        form.pack(fill="x")
+        self.rate_material = tk.StringVar()
+        self.rate_amount = tk.StringVar()
+        self.rate_start = tk.StringVar(value=date.today().isoformat())
+        self.rate_end = tk.StringVar()
+        self.rate_active = tk.BooleanVar(value=True)
+        self.rate_replace = tk.BooleanVar(value=True)
+        self.rate_notes = tk.StringVar()
+
+        ttk.Label(form, text="Material").grid(row=0, column=0, sticky="w")
+        self.rate_material_combo = ttk.Combobox(
+            form, textvariable=self.rate_material, state="readonly", width=42
+        )
+        self.rate_material_combo.grid(row=1, column=0, sticky="we", padx=(0, 8), pady=(0, 6))
+        ttk.Label(form, text="Rate amount").grid(row=0, column=1, sticky="w")
+        ttk.Entry(form, textvariable=self.rate_amount, width=12).grid(
+            row=1, column=1, sticky="w", padx=(0, 8), pady=(0, 6)
+        )
+        ttk.Label(form, text="Start YYYY-MM-DD").grid(row=0, column=2, sticky="w")
+        ttk.Entry(form, textvariable=self.rate_start, width=14).grid(
+            row=1, column=2, sticky="w", padx=(0, 8), pady=(0, 6)
+        )
+        ttk.Label(form, text="End optional").grid(row=0, column=3, sticky="w")
+        ttk.Entry(form, textvariable=self.rate_end, width=14).grid(
+            row=1, column=3, sticky="w", padx=(0, 8), pady=(0, 6)
+        )
+        ttk.Label(form, text="Notes").grid(row=2, column=0, sticky="w")
+        ttk.Entry(form, textvariable=self.rate_notes, width=82).grid(
+            row=3, column=0, columnspan=3, sticky="we", padx=(0, 8), pady=(0, 6)
+        )
+        ttk.Checkbutton(form, text="Active", variable=self.rate_active).grid(
+            row=3, column=3, sticky="w"
+        )
+        ttk.Checkbutton(
+            form,
+            text="End-date old active rate when adding",
+            variable=self.rate_replace,
+        ).grid(row=3, column=4, sticky="w")
+        form.columnconfigure(0, weight=1)
+
+        buttons = ttk.Frame(self.rate_tab)
+        buttons.pack(fill="x", pady=(8, 0))
+        ttk.Button(buttons, text="New", command=self.clear_rate_form).pack(side="left")
+        ttk.Button(buttons, text="Add Rate", command=self.save_new_rate).pack(
+            side="left", padx=(8, 0)
+        )
+        ttk.Button(buttons, text="Update Metadata", command=self.save_rate_metadata).pack(
+            side="left", padx=(8, 0)
+        )
+
+    def refresh_materials(self) -> None:
+        for item in self.material_tree.get_children():
+            self.material_tree.delete(item)
+        for material in list_materials(self.conn, active_only=False):
+            self.material_tree.insert(
+                "",
+                "end",
+                iid=str(material.id),
+                values=(
+                    material.id,
+                    material.display_name,
+                    material.category,
+                    material.report_grouping,
+                    "yes" if material.crv_eligible else "no",
+                    material.unit_type,
+                    "yes" if material.active else "no",
+                    material.sort_order,
+                ),
+            )
+        labels = []
+        self.material_rate_labels = {}
+        for material in list_materials(self.conn, active_only=False):
+            label = f"{material.display_name} ({material.unit_type})"
+            labels.append(label)
+            self.material_rate_labels[label] = material
+        self.rate_material_combo.configure(values=labels)
+        if labels and not self.rate_material.get():
+            self.rate_material.set(labels[0])
+        self.app.refresh_material_choices()
+
+    def refresh_rates(self) -> None:
+        for item in self.rate_tree.get_children():
+            self.rate_tree.delete(item)
+        for row in list_rates(self.conn):
+            self.rate_tree.insert(
+                "",
+                "end",
+                iid=str(row["id"]),
+                values=(
+                    row["id"],
+                    row["material_display_name"],
+                    format_cents(int(row["rate_cents_per_unit"])),
+                    row["unit_type"],
+                    row["effective_from"],
+                    row["effective_to"] or "",
+                    "yes" if row["active"] else "no",
+                    row["notes"],
+                ),
+            )
+
+    def on_material_select(self, _event: tk.Event) -> None:
+        selected = self.material_tree.selection()
+        if not selected:
+            return
+        self.selected_material_id = int(selected[0])
+        material = next(
+            mat
+            for mat in list_materials(self.conn, active_only=False)
+            if mat.id == self.selected_material_id
+        )
+        self.material_name.set(material.display_name)
+        self.material_category.set(material.category)
+        self.material_group.set(material.report_grouping)
+        self.material_crv.set(material.crv_eligible)
+        self.material_unit.set(material.unit_type)
+        self.material_active.set(material.active)
+        self.material_sort.set(str(material.sort_order))
+        self.material_notes.set(material.notes)
+
+    def clear_material_form(self) -> None:
+        self.selected_material_id = None
+        self.material_tree.selection_remove(self.material_tree.selection())
+        self.material_name.set("")
+        self.material_category.set("")
+        self.material_group.set("")
+        self.material_crv.set(False)
+        self.material_unit.set("weight")
+        self.material_active.set(True)
+        self.material_sort.set("0")
+        self.material_notes.set("")
+
+    def save_material(self) -> None:
+        try:
+            sort_order = int(self.material_sort.get() or "0")
+            if self.selected_material_id is None:
+                create_material_type(
+                    self.conn,
+                    display_name=self.material_name.get(),
+                    category=self.material_category.get(),
+                    report_grouping=self.material_group.get(),
+                    crv_eligible=self.material_crv.get(),
+                    unit_type=self.material_unit.get(),
+                    active=self.material_active.get(),
+                    sort_order=sort_order,
+                    notes=self.material_notes.get(),
+                )
+            else:
+                update_material_type(
+                    self.conn,
+                    self.selected_material_id,
+                    display_name=self.material_name.get(),
+                    category=self.material_category.get(),
+                    report_grouping=self.material_group.get(),
+                    crv_eligible=self.material_crv.get(),
+                    unit_type=self.material_unit.get(),
+                    active=self.material_active.get(),
+                    sort_order=sort_order,
+                    notes=self.material_notes.get(),
+                )
+        except ValueError as exc:
+            messagebox.showerror("Material validation", str(exc))
+            return
+        self.refresh_materials()
+        self.refresh_rates()
+
+    def toggle_material_active(self) -> None:
+        if self.selected_material_id is None:
+            messagebox.showerror("No material selected", "Select a material first.")
+            return
+        set_material_active(self.conn, self.selected_material_id, not self.material_active.get())
+        self.refresh_materials()
+
+    def on_rate_select(self, _event: tk.Event) -> None:
+        selected = self.rate_tree.selection()
+        if not selected:
+            return
+        self.selected_rate_id = int(selected[0])
+        row = next(row for row in list_rates(self.conn) if int(row["id"]) == self.selected_rate_id)
+        label = f"{row['material_display_name']} ({row['unit_type']})"
+        self.rate_material.set(label)
+        self.rate_amount.set(format_cents(int(row["rate_cents_per_unit"])).replace("$", ""))
+        self.rate_start.set(row["effective_from"])
+        self.rate_end.set(row["effective_to"] or "")
+        self.rate_active.set(bool(row["active"]))
+        self.rate_notes.set(row["notes"])
+
+    def clear_rate_form(self) -> None:
+        self.selected_rate_id = None
+        self.rate_tree.selection_remove(self.rate_tree.selection())
+        if self.material_rate_labels:
+            self.rate_material.set(next(iter(self.material_rate_labels)))
+        self.rate_amount.set("")
+        self.rate_start.set(date.today().isoformat())
+        self.rate_end.set("")
+        self.rate_active.set(True)
+        self.rate_replace.set(True)
+        self.rate_notes.set("")
+
+    def save_new_rate(self) -> None:
+        material = self.material_rate_labels.get(self.rate_material.get())
+        if material is None:
+            messagebox.showerror("Rate validation", "Select a material.")
+            return
+        try:
+            rate_id = add_rate(
+                self.conn,
+                material_type_id=material.id,
+                rate_cents_per_unit=dollars_to_cents(self.rate_amount.get()),
+                effective_from=self.rate_start.get(),
+                effective_to=self.rate_end.get() or None,
+                active=self.rate_active.get(),
+                notes=self.rate_notes.get(),
+                replace_current=self.rate_replace.get(),
+            )
+        except (InvalidOperation, ValueError) as exc:
+            messagebox.showerror("Rate validation", str(exc))
+            return
+        self.selected_rate_id = rate_id
+        self.refresh_rates()
+
+    def save_rate_metadata(self) -> None:
+        if self.selected_rate_id is None:
+            messagebox.showerror("No rate selected", "Select a rate first.")
+            return
+        try:
+            update_rate_metadata(
+                self.conn,
+                self.selected_rate_id,
+                effective_to=self.rate_end.get() or None,
+                active=self.rate_active.get(),
+                notes=self.rate_notes.get(),
+            )
+        except ValueError as exc:
+            messagebox.showerror("Rate validation", str(exc))
+            return
+        self.refresh_rates()

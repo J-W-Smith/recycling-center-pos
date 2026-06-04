@@ -19,6 +19,8 @@ class MaterialType:
     unit_type: UnitType
     report_grouping: str
     active: bool = True
+    sort_order: int = 0
+    notes: str = ""
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,7 @@ class Rate:
     effective_from: str
     effective_to: str | None = None
     notes: str = ""
+    active: bool = True
 
 
 @dataclass(frozen=True)
@@ -46,4 +49,3 @@ class TransactionInput:
     operator_initials: str
     payout_method: str = "cash"
     notes: str = ""
-

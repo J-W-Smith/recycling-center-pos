@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from app.pricing import cents_for_quantity, decimal_from_user, format_cents
+from app.pricing import cents_for_quantity, decimal_from_user, dollars_to_cents, format_cents
 
 
 def test_count_based_crv_calculation() -> None:
@@ -18,4 +18,4 @@ def test_decimal_cents_rounding_uses_decimal_not_float() -> None:
     assert cents_for_quantity(Decimal("0.333"), 100) == 33
     assert cents_for_quantity(Decimal("0.335"), 100) == 34
     assert format_cents(34) == "$0.34"
-
+    assert dollars_to_cents("$1.25") == 125
