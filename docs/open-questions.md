@@ -7,6 +7,10 @@
 - Who is allowed to change material and rate settings?
 - Should rate changes require a second-person approval or manager PIN?
 - Should old rate metadata ever be locked after first use?
+- Should the manager PIN be shared by role or should each employee have a separate login?
+- Who should review the admin audit log and how often?
+- How long must admin/config audit logs be retained?
+- Does the audit log need export or signed/tamper-evident storage?
 - Do they need scale integration?
 - What scale model?
 - Do they use a cash drawer?

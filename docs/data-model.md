@@ -70,6 +70,32 @@ Immutable receipt/internal copy snapshots.
 - `daily_report_runs`
 - `users`
 
+## `app_settings`
+
+Local app-level settings.
+
+- `key`
+- `value`
+- `created_at`
+- `updated_at`
+
+The manager PIN is stored here as a salted PBKDF2-SHA256 hash. The plain PIN is not stored.
+
+## `audit_log`
+
+Append-only admin/config change history.
+
+- `timestamp`
+- `operator`
+- `action_type`
+- `entity_type`: `material_type`, `rate`, or `settings`
+- `entity_id`
+- `before_value`
+- `after_value`
+- `notes`
+
+Logged actions include material creation/edit/deactivation/reactivation, rate creation, rate replacement/end-dating, manager PIN creation, and manager PIN changes.
+
 ## Data Safety Rules
 
 - Do not delete transactions by default.
@@ -80,3 +106,5 @@ Immutable receipt/internal copy snapshots.
 - Keep inactive materials and old rates for historical reporting.
 - Use effective dates so price changes do not require code changes.
 - Prevent overlapping active rate periods for the same material.
+- Keep admin audit entries append-only in the UI.
+- Do not store manager PINs in plain text.

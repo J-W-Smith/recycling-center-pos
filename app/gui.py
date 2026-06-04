@@ -5,19 +5,24 @@ import tkinter as tk
 from datetime import date
 from decimal import InvalidOperation
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 from app.db import (
     add_rate,
+    change_manager_pin,
+    create_manager_pin,
     create_material_type,
     create_transaction,
     fetch_transaction,
     get_current_rate,
+    has_manager_pin,
+    list_audit_entries,
     list_materials,
     list_rates,
     set_material_active,
     update_material_type,
     update_rate_metadata,
+    verify_manager_pin,
 )
 from app.models import LineItemInput, MaterialType, TransactionInput
 from app.pricing import dollars_to_cents, decimal_from_user, format_cents
@@ -250,7 +255,49 @@ class RecyclingPOSApp(tk.Tk):
         messagebox.showinfo("CSV exported", f"Exported {path}")
 
     def open_admin_settings(self) -> None:
+        if not self._manager_pin_allows_admin():
+            return
         AdminSettingsWindow(self, self.conn)
+
+    def _manager_pin_allows_admin(self) -> bool:
+        if not has_manager_pin(self.conn):
+            pin = simpledialog.askstring(
+                "Create Manager PIN",
+                "No manager PIN exists. Create a manager PIN:",
+                show="*",
+                parent=self,
+            )
+            if not pin:
+                return False
+            confirm = simpledialog.askstring(
+                "Confirm Manager PIN",
+                "Confirm the new manager PIN:",
+                show="*",
+                parent=self,
+            )
+            if pin != confirm:
+                messagebox.showerror("PIN setup failed", "Manager PIN entries did not match.")
+                return False
+            try:
+                create_manager_pin(self.conn, pin)
+            except ValueError as exc:
+                messagebox.showerror("PIN setup failed", str(exc))
+                return False
+            messagebox.showinfo("PIN created", "Manager PIN created.")
+            return True
+
+        pin = simpledialog.askstring(
+            "Manager PIN",
+            "Enter manager PIN:",
+            show="*",
+            parent=self,
+        )
+        if pin is None:
+            return False
+        if not verify_manager_pin(self.conn, pin):
+            messagebox.showerror("Access denied", "Incorrect manager PIN.")
+            return False
+        return True
 
 
 class AdminSettingsWindow(tk.Toplevel):
@@ -267,16 +314,24 @@ class AdminSettingsWindow(tk.Toplevel):
         self._build()
         self.refresh_materials()
         self.refresh_rates()
+        self.refresh_audit_log()
+        self.refresh_audit_log()
 
     def _build(self) -> None:
         tabs = ttk.Notebook(self)
         tabs.pack(fill="both", expand=True, padx=8, pady=8)
         self.material_tab = ttk.Frame(tabs, padding=8)
         self.rate_tab = ttk.Frame(tabs, padding=8)
+        self.audit_tab = ttk.Frame(tabs, padding=8)
+        self.settings_tab = ttk.Frame(tabs, padding=8)
         tabs.add(self.material_tab, text="Materials")
         tabs.add(self.rate_tab, text="Rates")
+        tabs.add(self.audit_tab, text="Audit Log")
+        tabs.add(self.settings_tab, text="Settings")
         self._build_material_tab()
         self._build_rate_tab()
+        self._build_audit_tab()
+        self._build_settings_tab()
 
     def _build_material_tab(self) -> None:
         self.material_tree = ttk.Treeview(
@@ -423,6 +478,75 @@ class AdminSettingsWindow(tk.Toplevel):
             side="left", padx=(8, 0)
         )
 
+    def _build_audit_tab(self) -> None:
+        filters = ttk.Frame(self.audit_tab)
+        filters.pack(fill="x", pady=(0, 8))
+        ttk.Label(filters, text="Filter").pack(side="left", padx=(0, 6))
+        self.audit_filter = tk.StringVar(value="all")
+        ttk.Combobox(
+            filters,
+            textvariable=self.audit_filter,
+            values=["all", "material_type", "rate", "settings"],
+            state="readonly",
+            width=18,
+        ).pack(side="left")
+        ttk.Button(filters, text="Refresh", command=self.refresh_audit_log).pack(
+            side="left", padx=(8, 0)
+        )
+
+        self.audit_tree = ttk.Treeview(
+            self.audit_tab,
+            columns=("time", "operator", "action", "entity", "entity_id", "notes"),
+            show="headings",
+            height=12,
+        )
+        headings = (
+            ("time", "Timestamp", 150),
+            ("operator", "Operator", 90),
+            ("action", "Action", 170),
+            ("entity", "Entity", 110),
+            ("entity_id", "Entity ID", 80),
+            ("notes", "Notes", 290),
+        )
+        for col, label, width in headings:
+            self.audit_tree.heading(col, text=label)
+            self.audit_tree.column(col, width=width, anchor="w")
+        self.audit_tree.pack(fill="x", pady=(0, 8))
+        self.audit_tree.bind("<<TreeviewSelect>>", self.on_audit_select)
+
+        self.audit_rows: dict[str, sqlite3.Row] = {}
+        self.audit_detail = tk.Text(
+            self.audit_tab, height=13, font=("Courier New", 9), wrap="word"
+        )
+        self.audit_detail.pack(fill="both", expand=True)
+
+    def _build_settings_tab(self) -> None:
+        frame = ttk.Frame(self.settings_tab)
+        frame.pack(fill="x")
+        ttk.Label(frame, text="Change Manager PIN", style="Header.TLabel").grid(
+            row=0, column=0, sticky="w", columnspan=2, pady=(0, 8)
+        )
+        self.current_pin = tk.StringVar()
+        self.new_pin = tk.StringVar()
+        self.confirm_pin = tk.StringVar()
+        fields = [
+            ("Current PIN", self.current_pin),
+            ("New PIN", self.new_pin),
+            ("Confirm New PIN", self.confirm_pin),
+        ]
+        for row, (label, variable) in enumerate(fields, start=1):
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", padx=(0, 8))
+            ttk.Entry(frame, textvariable=variable, show="*", width=24).grid(
+                row=row, column=1, sticky="w", pady=(0, 6)
+            )
+        ttk.Button(frame, text="Change PIN", command=self.save_manager_pin_change).grid(
+            row=4, column=1, sticky="w", pady=(8, 0)
+        )
+        ttk.Label(
+            self.settings_tab,
+            text="PIN protection is local-only access control for this workstation.",
+        ).pack(anchor="w", pady=(18, 0))
+
     def refresh_materials(self) -> None:
         for item in self.material_tree.get_children():
             self.material_tree.delete(item)
@@ -544,6 +668,7 @@ class AdminSettingsWindow(tk.Toplevel):
             return
         set_material_active(self.conn, self.selected_material_id, not self.material_active.get())
         self.refresh_materials()
+        self.refresh_audit_log()
 
     def on_rate_select(self, _event: tk.Event) -> None:
         selected = self.rate_tree.selection()
@@ -592,6 +717,7 @@ class AdminSettingsWindow(tk.Toplevel):
             return
         self.selected_rate_id = rate_id
         self.refresh_rates()
+        self.refresh_audit_log()
 
     def save_rate_metadata(self) -> None:
         if self.selected_rate_id is None:
@@ -609,3 +735,60 @@ class AdminSettingsWindow(tk.Toplevel):
             messagebox.showerror("Rate validation", str(exc))
             return
         self.refresh_rates()
+        self.refresh_audit_log()
+
+    def refresh_audit_log(self) -> None:
+        if not hasattr(self, "audit_tree"):
+            return
+        for item in self.audit_tree.get_children():
+            self.audit_tree.delete(item)
+        entity_type = self.audit_filter.get()
+        if entity_type == "all":
+            entity_type = None
+        self.audit_rows = {
+            str(row["id"]): row for row in list_audit_entries(self.conn, entity_type=entity_type)
+        }
+        for row_id, row in self.audit_rows.items():
+            self.audit_tree.insert(
+                "",
+                "end",
+                iid=row_id,
+                values=(
+                    row["timestamp"],
+                    row["operator"],
+                    row["action_type"],
+                    row["entity_type"],
+                    row["entity_id"] or "",
+                    row["notes"],
+                ),
+            )
+        self.audit_detail.delete("1.0", "end")
+
+    def on_audit_select(self, _event: tk.Event) -> None:
+        selected = self.audit_tree.selection()
+        if not selected:
+            return
+        row = self.audit_rows.get(selected[0])
+        if row is None:
+            return
+        detail = (
+            f"Before:\n{row['before_value'] or ''}\n\n"
+            f"After:\n{row['after_value'] or ''}"
+        )
+        self.audit_detail.delete("1.0", "end")
+        self.audit_detail.insert("1.0", detail)
+
+    def save_manager_pin_change(self) -> None:
+        if self.new_pin.get() != self.confirm_pin.get():
+            messagebox.showerror("PIN change failed", "New PIN entries did not match.")
+            return
+        try:
+            change_manager_pin(self.conn, self.current_pin.get(), self.new_pin.get())
+        except ValueError as exc:
+            messagebox.showerror("PIN change failed", str(exc))
+            return
+        self.current_pin.set("")
+        self.new_pin.set("")
+        self.confirm_pin.set("")
+        self.refresh_audit_log()
+        messagebox.showinfo("PIN changed", "Manager PIN changed.")

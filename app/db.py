@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import os
 import re
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -13,6 +17,8 @@ from app.receipt import build_receipt_text
 
 
 DEFAULT_DB_PATH = Path("data/recycling_pos.sqlite3")
+PIN_HASH_ITERATIONS = 260_000
+MANAGER_PIN_SETTING_KEY = "manager_pin_hash"
 
 
 def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -110,12 +116,185 @@ def init_db(conn: sqlite3.Connection) -> None:
             display_name TEXT NOT NULL,
             active INTEGER NOT NULL DEFAULT 1
         );
+
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            operator TEXT NOT NULL DEFAULT 'manager',
+            action_type TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT,
+            before_value TEXT,
+            after_value TEXT,
+            notes TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp
+            ON audit_log(timestamp);
+
+        CREATE INDEX IF NOT EXISTS idx_audit_log_entity
+            ON audit_log(entity_type, entity_id);
         """
     )
     _ensure_column(conn, "material_types", "sort_order", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "material_types", "notes", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "rates", "active", "INTEGER NOT NULL DEFAULT 1")
     conn.commit()
+
+
+def has_manager_pin(conn: sqlite3.Connection) -> bool:
+    return get_setting(conn, MANAGER_PIN_SETTING_KEY) is not None
+
+
+def create_manager_pin(conn: sqlite3.Connection, pin: str, operator: str = "manager") -> None:
+    if has_manager_pin(conn):
+        raise ValueError("Manager PIN already exists.")
+    _validate_pin_input(pin)
+    with conn:
+        set_setting(conn, MANAGER_PIN_SETTING_KEY, _hash_pin(pin))
+        add_audit_entry(
+            conn,
+            action_type="manager_pin_created",
+            entity_type="settings",
+            entity_id=MANAGER_PIN_SETTING_KEY,
+            before_value=None,
+            after_value={"manager_pin_hash": "set"},
+            operator=operator,
+            notes="Manager PIN created.",
+        )
+
+
+def change_manager_pin(
+    conn: sqlite3.Connection,
+    current_pin: str,
+    new_pin: str,
+    operator: str = "manager",
+) -> None:
+    if not verify_manager_pin(conn, current_pin):
+        raise ValueError("Current manager PIN is incorrect.")
+    _validate_pin_input(new_pin)
+    with conn:
+        before = {"manager_pin_hash": "set"}
+        set_setting(conn, MANAGER_PIN_SETTING_KEY, _hash_pin(new_pin))
+        add_audit_entry(
+            conn,
+            action_type="manager_pin_changed",
+            entity_type="settings",
+            entity_id=MANAGER_PIN_SETTING_KEY,
+            before_value=before,
+            after_value={"manager_pin_hash": "changed"},
+            operator=operator,
+            notes="Manager PIN changed.",
+        )
+
+
+def verify_manager_pin(conn: sqlite3.Connection, pin: str) -> bool:
+    stored_hash = get_setting(conn, MANAGER_PIN_SETTING_KEY)
+    if stored_hash is None:
+        return False
+    try:
+        algorithm, iterations, salt_hex, digest_hex = stored_hash.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        expected = bytes.fromhex(digest_hex)
+        actual = hashlib.pbkdf2_hmac(
+            "sha256",
+            pin.encode("utf-8"),
+            bytes.fromhex(salt_hex),
+            int(iterations),
+        )
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(actual, expected)
+
+
+def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return None if row is None else row["value"]
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO app_settings (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (key, value),
+    )
+
+
+def _hash_pin(pin: str) -> str:
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", pin.encode("utf-8"), salt, PIN_HASH_ITERATIONS
+    )
+    return f"pbkdf2_sha256${PIN_HASH_ITERATIONS}${salt.hex()}${digest.hex()}"
+
+
+def _validate_pin_input(pin: str) -> None:
+    if len(pin.strip()) < 4:
+        raise ValueError("Manager PIN must be at least 4 characters.")
+
+
+def add_audit_entry(
+    conn: sqlite3.Connection,
+    *,
+    action_type: str,
+    entity_type: str,
+    entity_id: str | int | None = None,
+    before_value: object | None = None,
+    after_value: object | None = None,
+    notes: str = "",
+    operator: str = "manager",
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO audit_log (
+            timestamp, operator, action_type, entity_type, entity_id,
+            before_value, after_value, notes
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            datetime.now().isoformat(timespec="seconds"),
+            operator.strip() or "manager",
+            action_type,
+            entity_type,
+            None if entity_id is None else str(entity_id),
+            _json_or_none(before_value),
+            _json_or_none(after_value),
+            notes.strip(),
+        ),
+    )
+
+
+def list_audit_entries(
+    conn: sqlite3.Connection, entity_type: str | None = None, limit: int = 200
+) -> list[sqlite3.Row]:
+    sql = "SELECT * FROM audit_log"
+    params: list[object] = []
+    if entity_type:
+        sql += " WHERE entity_type = ?"
+        params.append(entity_type)
+    sql += " ORDER BY timestamp DESC, id DESC LIMIT ?"
+    params.append(limit)
+    return list(conn.execute(sql, params))
+
+
+def _json_or_none(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def _ensure_column(
@@ -216,6 +395,9 @@ def create_material_type(
     notes: str = "",
     key: str | None = None,
     default_rate_cents_per_unit: int = 0,
+    audit: bool = True,
+    operator: str = "manager",
+    audit_notes: str = "",
 ) -> int:
     key = key or _unique_material_key(conn, display_name)
     _validate_unit_type(unit_type)
@@ -241,7 +423,19 @@ def create_material_type(
                 notes.strip(),
             ),
         )
-    return int(cursor.lastrowid)
+        material_id = int(cursor.lastrowid)
+        if audit:
+            add_audit_entry(
+                conn,
+                action_type="material_created",
+                entity_type="material_type",
+                entity_id=material_id,
+                before_value=None,
+                after_value=_material_snapshot(conn, material_id),
+                operator=operator,
+                notes=audit_notes,
+            )
+    return material_id
 
 
 def update_material_type(
@@ -256,9 +450,13 @@ def update_material_type(
     active: bool,
     sort_order: int = 0,
     notes: str = "",
+    audit: bool = True,
+    operator: str = "manager",
+    audit_notes: str = "",
 ) -> None:
     _validate_unit_type(unit_type)
     with conn:
+        before = _material_snapshot(conn, material_type_id)
         result = conn.execute(
             """
             UPDATE material_types
@@ -278,20 +476,62 @@ def update_material_type(
                 material_type_id,
             ),
         )
+        if result.rowcount:
+            after = _material_snapshot(conn, material_type_id)
+            action_type = "material_edited"
+            if before and after and before["active"] != after["active"]:
+                action_type = (
+                    "material_reactivated" if after["active"] else "material_deactivated"
+                )
+            if audit:
+                add_audit_entry(
+                    conn,
+                    action_type=action_type,
+                    entity_type="material_type",
+                    entity_id=material_type_id,
+                    before_value=before,
+                    after_value=after,
+                    operator=operator,
+                    notes=audit_notes,
+                )
     if result.rowcount == 0:
         raise ValueError(f"Unknown material_type_id: {material_type_id}")
 
 
 def set_material_active(
-    conn: sqlite3.Connection, material_type_id: int, active: bool
+    conn: sqlite3.Connection,
+    material_type_id: int,
+    active: bool,
+    *,
+    audit: bool = True,
+    operator: str = "manager",
+    audit_notes: str = "",
 ) -> None:
     with conn:
+        before = _material_snapshot(conn, material_type_id)
         result = conn.execute(
             "UPDATE material_types SET active = ? WHERE id = ?",
             (1 if active else 0, material_type_id),
         )
+        if result.rowcount and audit:
+            after = _material_snapshot(conn, material_type_id)
+            add_audit_entry(
+                conn,
+                action_type="material_reactivated" if active else "material_deactivated",
+                entity_type="material_type",
+                entity_id=material_type_id,
+                before_value=before,
+                after_value=after,
+                operator=operator,
+                notes=audit_notes,
+            )
     if result.rowcount == 0:
         raise ValueError(f"Unknown material_type_id: {material_type_id}")
+
+
+def _material_snapshot(conn: sqlite3.Connection, material_type_id: int) -> dict[str, object] | None:
+    row = conn.execute("SELECT * FROM material_types WHERE id = ?", (material_type_id,)).fetchone()
+    return _row_to_dict(row)
 
 
 def _unique_material_key(conn: sqlite3.Connection, display_name: str) -> str:
@@ -344,6 +584,9 @@ def add_rate(
     notes: str = "",
     rate_kind: str | None = None,
     replace_current: bool = False,
+    audit: bool = True,
+    operator: str = "manager",
+    audit_notes: str = "",
 ) -> int:
     material = get_material(conn, material_type_id)
     start = _parse_date(effective_from, "effective_from")
@@ -352,8 +595,23 @@ def add_rate(
         raise ValueError("effective_to cannot be before effective_from.")
 
     with conn:
+        replaced_before: list[dict[str, object]] = []
         if active and replace_current:
             previous_end = (start - timedelta(days=1)).isoformat()
+            replaced_rows = conn.execute(
+                """
+                SELECT *
+                FROM rates
+                WHERE material_type_id = ?
+                  AND active = 1
+                  AND effective_from < ?
+                  AND (effective_to IS NULL OR effective_to >= ?)
+                """,
+                (material_type_id, effective_from, effective_from),
+            ).fetchall()
+            replaced_before = [
+                snapshot for row in replaced_rows if (snapshot := _row_to_dict(row))
+            ]
             conn.execute(
                 """
                 UPDATE rates
@@ -365,6 +623,19 @@ def add_rate(
                 """,
                 (previous_end, material_type_id, effective_from, effective_from),
             )
+            if audit:
+                for before in replaced_before:
+                    after = _rate_snapshot(conn, int(before["id"]))
+                    add_audit_entry(
+                        conn,
+                        action_type="rate_replaced_end_dated",
+                        entity_type="rate",
+                        entity_id=before["id"],
+                        before_value=before,
+                        after_value=after,
+                        operator=operator,
+                        notes=audit_notes or "End-dated by replacement rate.",
+                    )
         if active and rate_overlaps(
             conn,
             material_type_id=material_type_id,
@@ -392,7 +663,19 @@ def add_rate(
                 1 if active else 0,
             ),
         )
-    return int(cursor.lastrowid)
+        rate_id = int(cursor.lastrowid)
+        if audit:
+            add_audit_entry(
+                conn,
+                action_type="rate_created",
+                entity_type="rate",
+                entity_id=rate_id,
+                before_value=None,
+                after_value=_rate_snapshot(conn, rate_id),
+                operator=operator,
+                notes=audit_notes,
+            )
+    return rate_id
 
 
 def update_rate_metadata(
@@ -402,6 +685,9 @@ def update_rate_metadata(
     effective_to: str | None,
     active: bool,
     notes: str,
+    audit: bool = True,
+    operator: str = "manager",
+    audit_notes: str = "",
 ) -> None:
     rate = get_rate(conn, rate_id)
     if _parse_optional_date(effective_to, "effective_to") is not None:
@@ -421,6 +707,7 @@ def update_rate_metadata(
             f"Active rate period overlaps another rate for {material.display_name}."
         )
     with conn:
+        before = _rate_snapshot(conn, rate_id)
         conn.execute(
             """
             UPDATE rates
@@ -429,6 +716,28 @@ def update_rate_metadata(
             """,
             (effective_to or None, 1 if active else 0, notes.strip(), rate_id),
         )
+        if audit:
+            add_audit_entry(
+                conn,
+                action_type="rate_edited",
+                entity_type="rate",
+                entity_id=rate_id,
+                before_value=before,
+                after_value=_rate_snapshot(conn, rate_id),
+                operator=operator,
+                notes=audit_notes,
+            )
+
+
+def _rate_snapshot(conn: sqlite3.Connection, rate_id: int) -> dict[str, object] | None:
+    row = conn.execute("SELECT * FROM rates WHERE id = ?", (rate_id,)).fetchone()
+    return _row_to_dict(row)
+
+
+def _row_to_dict(row: sqlite3.Row | None) -> dict[str, object] | None:
+    if row is None:
+        return None
+    return {key: row[key] for key in row.keys()}
 
 
 def rate_overlaps(
