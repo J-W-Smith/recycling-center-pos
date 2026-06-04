@@ -11,6 +11,11 @@
 - Who should review the admin audit log and how often?
 - How long must admin/config audit logs be retained?
 - Does the audit log need export or signed/tamper-evident storage?
+- Where should local database backups be stored?
+- Who is allowed to restore from backup?
+- How often should backups be copied off the workstation?
+- How long should pre-restore backups be retained?
+- Should restore events require a written reason or second-person approval?
 - Do they need scale integration?
 - What scale model?
 - Do they use a cash drawer?

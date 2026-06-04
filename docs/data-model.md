@@ -94,7 +94,9 @@ Append-only admin/config change history.
 - `after_value`
 - `notes`
 
-Logged actions include material creation/edit/deactivation/reactivation, rate creation, rate replacement/end-dating, manager PIN creation, and manager PIN changes.
+Logged actions include material creation/edit/deactivation/reactivation, rate creation, rate replacement/end-dating, manager PIN creation/change, audit log export, database backup creation, and database restore attempted/completed/failed events.
+
+Backup files are SQLite database copies. They contain transactions, receipt snapshots, material/rate settings, audit log entries, and app settings.
 
 ## Data Safety Rules
 
@@ -108,3 +110,5 @@ Logged actions include material creation/edit/deactivation/reactivation, rate cr
 - Prevent overlapping active rate periods for the same material.
 - Keep admin audit entries append-only in the UI.
 - Do not store manager PINs in plain text.
+- Validate expected tables before restore.
+- Create a pre-restore backup before replacing local database contents.

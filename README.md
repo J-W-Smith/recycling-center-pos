@@ -11,6 +11,8 @@ The project is designed around local-first operation on an older Windows 11 Inte
 - Admin Settings window for adding/editing materials and rates without code changes.
 - Manager PIN protection for Admin Settings.
 - Read-only admin audit log for material, rate, and settings changes.
+- Audit log CSV export.
+- Local SQLite database backup and cautious restore controls.
 - CRV and non-CRV line items tracked separately.
 - Count, weight, and manual payout line items.
 - Transaction save flow with receipt snapshot text stored at transaction time.
@@ -20,6 +22,7 @@ The project is designed around local-first operation on an older Windows 11 Inte
 - CSV export for daily reports.
 - Focused pytest coverage for pricing, admin config, receipts, reports, transactions, and Decimal/cents handling.
 - Focused tests for manager PIN hashing/validation and admin audit logging.
+- Focused tests for audit CSV export and local database backup/restore behavior.
 
 ## Quickstart
 
@@ -49,7 +52,15 @@ The app warns when an active rate period overlaps another active period for the 
 
 Startup seed data creates missing defaults only. It should not reactivate or overwrite materials that were later changed in Admin Settings.
 
-The Audit Log tab shows newest entries first and records material creation/edit/deactivation/reactivation, rate creation/replacement/end-date changes, and manager PIN creation/change events. Audit entries keep before/after JSON snapshots where available.
+The Audit Log tab shows newest entries first and records material creation/edit/deactivation/reactivation, rate creation/replacement/end-date changes, manager PIN creation/change events, audit CSV exports, backups, and restore attempts/completions/failures. Audit entries keep before/after JSON snapshots where available.
+
+Use `Export CSV` in the Audit Log tab to save the currently filtered audit view. The default filename is `audit_log_YYYY-MM-DD_HHMMSS.csv`.
+
+## Backup And Restore
+
+Use `Admin Settings` > `Settings` to create a local SQLite backup. The default filename is `recycling_pos_backup_YYYY-MM-DD_HHMMSS.sqlite3`. Store backups somewhere outside the app working folder when practical, and periodically copy backups off the workstation to removable storage or another controlled location.
+
+Restore is intentionally cautious. The manager chooses a backup file, sees a warning, enters the manager PIN again, and the app creates a pre-restore backup before replacing the current database contents. Restore validates that the selected file appears to be a recycling-center-pos SQLite database by checking expected tables. Restart the app after restore before normal operation.
 
 ## Local-First / Offline Design
 
@@ -59,6 +70,7 @@ The Audit Log tab shows newest entries first and records material creation/edit/
 - Receipts are snapshotted so later rate changes do not alter old transaction records.
 - Old materials and rates are retained for audit/history instead of hard-deleted.
 - Admin settings are protected by local PIN access control.
+- Backups are local SQLite copies and are not cloud-synced by the app.
 - Currency is stored as integer cents.
 - Quantities and weights are handled with `Decimal` and stored as text in SQLite.
 
@@ -69,7 +81,7 @@ This repository is not a compliance-certified system. California CRV rules, cert
 The initial CRV assumptions are planning placeholders only.
 The admin screen makes CRV values configurable, but it does not replace compliance review.
 
-The manager PIN is local workstation access control for the MVP. It is not enterprise-grade identity management, does not identify individual employees, and does not replace OS account security, backups, disk encryption, or production audit controls.
+The manager PIN is local workstation access control for the MVP. It is not enterprise-grade identity management, does not identify individual employees, and does not replace OS account security, backups, disk encryption, or production audit controls. Restoring an old backup can roll back operational records, so restore should be manager-only and documented in operating procedures.
 
 ## Intentionally Not Built Yet
 
@@ -80,7 +92,6 @@ The manager PIN is local workstation access control for the MVP. It is not enter
 - Thermal receipt printer integration.
 - Barcode scanning.
 - Customer identity capture.
-- Backup/restore workflow.
 - PDF export.
 - CalRecycle processor report submission.
 - Multi-location sync.

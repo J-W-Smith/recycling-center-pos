@@ -5,7 +5,7 @@ import tkinter as tk
 from datetime import date
 from decimal import InvalidOperation
 from pathlib import Path
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from app.db import (
     add_rate,
@@ -25,6 +25,15 @@ from app.db import (
     verify_manager_pin,
 )
 from app.models import LineItemInput, MaterialType, TransactionInput
+from app.maintenance import (
+    create_database_backup,
+    default_audit_export_name,
+    default_backup_name,
+    default_pre_restore_backup_name,
+    export_audit_log_csv,
+    get_connection_db_path,
+    restore_database_from_backup,
+)
 from app.pricing import dollars_to_cents, decimal_from_user, format_cents
 from app.reports import export_daily_report_csv, generate_daily_report, render_daily_report_html
 
@@ -493,6 +502,9 @@ class AdminSettingsWindow(tk.Toplevel):
         ttk.Button(filters, text="Refresh", command=self.refresh_audit_log).pack(
             side="left", padx=(8, 0)
         )
+        ttk.Button(filters, text="Export CSV", command=self.export_audit_log).pack(
+            side="left", padx=(8, 0)
+        )
 
         self.audit_tree = ttk.Treeview(
             self.audit_tab,
@@ -546,6 +558,22 @@ class AdminSettingsWindow(tk.Toplevel):
             self.settings_tab,
             text="PIN protection is local-only access control for this workstation.",
         ).pack(anchor="w", pady=(18, 0))
+
+        backup_frame = ttk.Frame(self.settings_tab)
+        backup_frame.pack(fill="x", pady=(22, 0))
+        ttk.Label(backup_frame, text="Database Backup / Restore", style="Header.TLabel").pack(
+            anchor="w", pady=(0, 8)
+        )
+        ttk.Button(
+            backup_frame, text="Create Database Backup", command=self.create_backup
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            backup_frame, text="Restore From Backup", command=self.restore_from_backup
+        ).pack(side="left")
+        ttk.Label(
+            self.settings_tab,
+            text="Restore replaces the local database and creates a pre-restore backup first.",
+        ).pack(anchor="w", pady=(12, 0))
 
     def refresh_materials(self) -> None:
         for item in self.material_tree.get_children():
@@ -792,3 +820,90 @@ class AdminSettingsWindow(tk.Toplevel):
         self.confirm_pin.set("")
         self.refresh_audit_log()
         messagebox.showinfo("PIN changed", "Manager PIN changed.")
+
+    def export_audit_log(self) -> None:
+        entity_type = self.audit_filter.get()
+        if entity_type == "all":
+            entity_type = None
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Export Audit Log CSV",
+            initialfile=default_audit_export_name(),
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            export_audit_log_csv(self.conn, path, entity_type=entity_type)
+        except OSError as exc:
+            messagebox.showerror("Audit export failed", str(exc))
+            return
+        self.refresh_audit_log()
+        messagebox.showinfo("Audit export complete", f"Exported {path}")
+
+    def create_backup(self) -> None:
+        db_path = get_connection_db_path(self.conn)
+        initial_dir = db_path.parent if db_path is not None else Path("data")
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Create Database Backup",
+            initialdir=str(initial_dir),
+            initialfile=default_backup_name(),
+            defaultextension=".sqlite3",
+            filetypes=[("SQLite databases", "*.sqlite3"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            create_database_backup(self.conn, path)
+        except (OSError, ValueError, sqlite3.DatabaseError) as exc:
+            messagebox.showerror("Backup failed", str(exc))
+            return
+        self.refresh_audit_log()
+        messagebox.showinfo("Backup complete", f"Backup created:\n{path}")
+
+    def restore_from_backup(self) -> None:
+        restore_path = filedialog.askopenfilename(
+            parent=self,
+            title="Choose Backup To Restore",
+            filetypes=[("SQLite databases", "*.sqlite3"), ("All files", "*.*")],
+        )
+        if not restore_path:
+            return
+        confirmed = messagebox.askyesno(
+            "Restore database?",
+            "Restore will replace the current local database. A pre-restore backup "
+            "will be created automatically. Continue?",
+            icon="warning",
+        )
+        if not confirmed:
+            return
+        pin = simpledialog.askstring(
+            "Confirm Manager PIN",
+            "Enter manager PIN again to restore:",
+            show="*",
+            parent=self,
+        )
+        if pin is None:
+            return
+        if not verify_manager_pin(self.conn, pin):
+            messagebox.showerror("Restore denied", "Incorrect manager PIN.")
+            return
+        db_path = get_connection_db_path(self.conn)
+        backup_dir = (db_path.parent if db_path is not None else Path("data")) / "backups"
+        pre_restore_path = backup_dir / default_pre_restore_backup_name()
+        try:
+            restore_database_from_backup(self.conn, restore_path, pre_restore_path)
+        except (OSError, ValueError, sqlite3.DatabaseError) as exc:
+            self.refresh_audit_log()
+            messagebox.showerror("Restore failed", str(exc))
+            return
+        self.refresh_materials()
+        self.refresh_rates()
+        self.refresh_audit_log()
+        messagebox.showinfo(
+            "Restore complete",
+            "Database restored. Restart the app before regular operation.\n\n"
+            f"Pre-restore backup:\n{pre_restore_path}",
+        )

@@ -10,6 +10,9 @@
 - Manager PIN prompt before opening Admin Settings.
 - Local salted-hash manager PIN storage and PIN change screen.
 - Read-only Audit Log tab for admin/config changes.
+- Audit Log CSV export using current Audit Log filters.
+- Local SQLite database backup control.
+- Cautious local SQLite restore with validation, warning, PIN confirmation, and pre-restore backup.
 - Material add/edit plus activate/deactivate behavior.
 - Rate add/update metadata behavior with effective dates and overlap detection.
 - Text receipt snapshot display.
@@ -17,6 +20,7 @@
 - Daily CSV export.
 - Tests for pricing, admin configuration, receipt snapshots, transaction totals, daily reports, void handling, and cents/Decimal behavior.
 - Tests for manager PIN hashing/validation/change, audit log entries, before/after snapshots, and existing-database migrations.
+- Tests for audit CSV export, database backup copies, restore rejection, pre-restore backup creation, and valid restore replacement.
 
 ## Deferred
 
@@ -29,7 +33,7 @@
 - Business-specific payout approval rules.
 - Role-protected admin access.
 - Enterprise authentication or employee-specific identity management.
-- Audit log export, signing, retention policy, or tamper-evidence.
+- Audit log signing, retention policy automation, or tamper-evidence.
 - PDF exports.
 - Installer packaging.
 - Multi-workstation or multi-location syncing.
@@ -43,3 +47,4 @@
 - Do not delete or rewrite transaction records as the normal correction path.
 - Do not hard-delete materials or rates as the default admin action.
 - Do not present local PIN protection as full security or compliance certification.
+- Do not silently restore a database without warning, PIN confirmation, and a pre-restore backup.
