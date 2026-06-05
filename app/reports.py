@@ -20,6 +20,10 @@ def generate_daily_report(conn: sqlite3.Connection, report_date: date | str) -> 
             t.status,
             t.total_cents AS transaction_total_cents,
             t.void_reason,
+            COALESCE(NULLIF(t.operator_display_name_snapshot, ''), 'Unknown') AS operator_name,
+            COALESCE(
+                NULLIF(t.operator_initials_snapshot, ''), t.operator_initials
+            ) AS operator_initials,
             li.description,
             li.quantity,
             li.unit_type,
@@ -46,6 +50,14 @@ def generate_daily_report(conn: sqlite3.Connection, report_date: date | str) -> 
         }
     )
     voided: dict[str, dict[str, Any]] = {}
+    operator_groups: dict[tuple[str, str], dict[str, Any]] = defaultdict(
+        lambda: {
+            "operator_name": "",
+            "operator_initials": "",
+            "total_cents": 0,
+            "transaction_ids": set(),
+        }
+    )
     grand_total_cents = 0
 
     for row in rows:
@@ -55,6 +67,7 @@ def generate_daily_report(conn: sqlite3.Connection, report_date: date | str) -> 
                 {
                     "transaction_id": row["transaction_id"],
                     "reason": row["void_reason"] or "",
+                    "operator": _operator_label(row["operator_name"], row["operator_initials"]),
                     "line_total_cents": 0,
                 },
             )
@@ -78,6 +91,12 @@ def generate_daily_report(conn: sqlite3.Connection, report_date: date | str) -> 
         group["total_cents"] += int(row["subtotal_cents"])
         group["transaction_ids"].add(row["transaction_id"])
         grand_total_cents += int(row["subtotal_cents"])
+        operator_key = (row["operator_name"], row["operator_initials"])
+        operator_group = operator_groups[operator_key]
+        operator_group["operator_name"] = row["operator_name"]
+        operator_group["operator_initials"] = row["operator_initials"]
+        operator_group["total_cents"] += int(row["subtotal_cents"])
+        operator_group["transaction_ids"].add(row["transaction_id"])
 
     group_list = []
     for group in groups.values():
@@ -93,10 +112,25 @@ def generate_daily_report(conn: sqlite3.Connection, report_date: date | str) -> 
             }
         )
     group_list.sort(key=lambda g: (g["report_grouping"], g["description"]))
+    operator_list = []
+    for group in operator_groups.values():
+        operator_list.append(
+            {
+                "operator_name": group["operator_name"],
+                "operator_initials": group["operator_initials"],
+                "operator_label": _operator_label(
+                    group["operator_name"], group["operator_initials"]
+                ),
+                "total_cents": group["total_cents"],
+                "transaction_count": len(group["transaction_ids"]),
+            }
+        )
+    operator_list.sort(key=lambda g: g["operator_label"])
 
     return {
         "date": day,
         "groups": group_list,
+        "operator_summaries": operator_list,
         "grand_total_cents": grand_total_cents,
         "voided_transactions": list(voided.values()),
     }
@@ -106,6 +140,14 @@ def _decimal_string_add(left: str, right: str) -> str:
     from decimal import Decimal
 
     return str(Decimal(left) + Decimal(right))
+
+
+def _operator_label(name: str, initials: str) -> str:
+    name = (name or "").strip()
+    initials = (initials or "").strip()
+    if name and initials:
+        return f"{name} ({initials})"
+    return initials or name or "Unknown"
 
 
 def export_daily_report_csv(report: dict[str, Any], output_path: str | Path) -> Path:
@@ -141,12 +183,24 @@ def export_daily_report_csv(report: dict[str, Any], output_path: str | Path) -> 
         writer.writerow([])
         writer.writerow(["Grand Total", format_cents(report["grand_total_cents"])])
         writer.writerow([])
+        writer.writerow(["Operator Summary"])
+        writer.writerow(["Operator", "Transactions", "Total Paid"])
+        for operator in report["operator_summaries"]:
+            writer.writerow(
+                [
+                    operator["operator_label"],
+                    operator["transaction_count"],
+                    format_cents(operator["total_cents"]),
+                ]
+            )
+        writer.writerow([])
         writer.writerow(["Voided/Corrected Transactions"])
-        writer.writerow(["Transaction ID", "Reason", "Voided Line Total"])
+        writer.writerow(["Transaction ID", "Operator", "Reason", "Voided Line Total"])
         for voided in report["voided_transactions"]:
             writer.writerow(
                 [
                     voided["transaction_id"],
+                    voided["operator"],
                     voided["reason"],
                     format_cents(voided["line_total_cents"]),
                 ]
@@ -170,10 +224,19 @@ def render_daily_report_html(report: dict[str, Any]) -> str:
     voided_rows = "\n".join(
         "<tr>"
         f"<td>{escape(item['transaction_id'])}</td>"
+        f"<td>{escape(item['operator'])}</td>"
         f"<td>{escape(item['reason'])}</td>"
         f"<td>{format_cents(item['line_total_cents'])}</td>"
         "</tr>"
         for item in report["voided_transactions"]
+    )
+    operator_rows = "\n".join(
+        "<tr>"
+        f"<td>{escape(item['operator_label'])}</td>"
+        f"<td>{item['transaction_count']}</td>"
+        f"<td>{format_cents(item['total_cents'])}</td>"
+        "</tr>"
+        for item in report["operator_summaries"]
     )
     return f"""<!doctype html>
 <html lang="en">
@@ -201,13 +264,19 @@ def render_daily_report_html(report: dict[str, Any]) -> str:
     <tbody>{rows}</tbody>
   </table>
   <h2>Grand Total: {format_cents(report['grand_total_cents'])}</h2>
+  <h2>Operator Summary</h2>
+  <table>
+    <thead><tr><th>Operator</th><th>Transactions</th><th>Total Paid</th></tr></thead>
+    <tbody>{operator_rows}</tbody>
+  </table>
   <h2>Voided/Corrected Transactions</h2>
   <table>
-    <thead><tr><th>Transaction ID</th><th>Reason</th><th>Voided Line Total</th></tr></thead>
+    <thead>
+      <tr><th>Transaction ID</th><th>Operator</th><th>Reason</th><th>Voided Line Total</th></tr>
+    </thead>
     <tbody>{voided_rows}</tbody>
   </table>
   <p>PDF export and certified processor reporting are future extension points.</p>
 </body>
 </html>
 """
-

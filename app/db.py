@@ -11,7 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
-from app.models import LineItemInput, MaterialType, Rate, TransactionInput
+from app.models import LineItemInput, MaterialType, Operator, Rate, TransactionInput
 from app.pricing import cents_for_quantity
 from app.receipt import build_receipt_text
 
@@ -67,7 +67,10 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS transactions (
             id TEXT PRIMARY KEY,
             created_at TEXT NOT NULL,
+            operator_id INTEGER REFERENCES operators(id),
             operator_initials TEXT NOT NULL,
+            operator_display_name_snapshot TEXT NOT NULL DEFAULT '',
+            operator_initials_snapshot TEXT NOT NULL DEFAULT '',
             payout_method TEXT NOT NULL,
             notes TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'active'
@@ -117,6 +120,18 @@ def init_db(conn: sqlite3.Connection) -> None:
             active INTEGER NOT NULL DEFAULT 1
         );
 
+        CREATE TABLE IF NOT EXISTS operators (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            display_name TEXT NOT NULL,
+            initials TEXT NOT NULL UNIQUE,
+            role TEXT NOT NULL DEFAULT 'operator'
+                CHECK (role IN ('operator', 'manager', 'admin')),
+            active INTEGER NOT NULL DEFAULT 1,
+            notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
@@ -146,6 +161,26 @@ def init_db(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "material_types", "sort_order", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "material_types", "notes", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "rates", "active", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(conn, "transactions", "operator_id", "INTEGER REFERENCES operators(id)")
+    _ensure_column(
+        conn,
+        "transactions",
+        "operator_display_name_snapshot",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    _ensure_column(
+        conn,
+        "transactions",
+        "operator_initials_snapshot",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    conn.execute(
+        """
+        UPDATE transactions
+        SET operator_initials_snapshot = operator_initials
+        WHERE operator_initials_snapshot = '' AND operator_initials != ''
+        """
+    )
     conn.commit()
 
 
@@ -318,6 +353,194 @@ def material_from_row(row: sqlite3.Row) -> MaterialType:
         sort_order=int(row["sort_order"]),
         notes=row["notes"],
     )
+
+
+def operator_from_row(row: sqlite3.Row) -> Operator:
+    return Operator(
+        id=row["id"],
+        display_name=row["display_name"],
+        initials=row["initials"],
+        role=row["role"],
+        active=bool(row["active"]),
+        notes=row["notes"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def list_operators(conn: sqlite3.Connection, active_only: bool = True) -> list[Operator]:
+    sql = "SELECT * FROM operators"
+    params: tuple[object, ...] = ()
+    if active_only:
+        sql += " WHERE active = ?"
+        params = (1,)
+    sql += " ORDER BY active DESC, display_name, initials"
+    return [operator_from_row(row) for row in conn.execute(sql, params)]
+
+
+def get_operator(conn: sqlite3.Connection, operator_id: int) -> Operator:
+    row = conn.execute("SELECT * FROM operators WHERE id = ?", (operator_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"Unknown operator_id: {operator_id}")
+    return operator_from_row(row)
+
+
+def has_active_operator(conn: sqlite3.Connection) -> bool:
+    row = conn.execute("SELECT 1 FROM operators WHERE active = 1 LIMIT 1").fetchone()
+    return row is not None
+
+
+def create_operator(
+    conn: sqlite3.Connection,
+    *,
+    display_name: str,
+    initials: str,
+    role: str = "operator",
+    active: bool = True,
+    notes: str = "",
+    audit: bool = True,
+    operator: str = "manager",
+    audit_notes: str = "",
+) -> int:
+    _validate_operator_role(role)
+    normalized_initials = initials.strip().upper()
+    if not display_name.strip():
+        raise ValueError("Operator display name is required.")
+    if not normalized_initials:
+        raise ValueError("Operator initials are required.")
+    with conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO operators (
+                display_name, initials, role, active, notes, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (
+                display_name.strip(),
+                normalized_initials,
+                role,
+                1 if active else 0,
+                notes.strip(),
+            ),
+        )
+        operator_id = int(cursor.lastrowid)
+        if audit:
+            add_audit_entry(
+                conn,
+                action_type="operator_created",
+                entity_type="operator",
+                entity_id=operator_id,
+                before_value=None,
+                after_value=_operator_snapshot(conn, operator_id),
+                operator=operator,
+                notes=audit_notes,
+            )
+    return operator_id
+
+
+def update_operator(
+    conn: sqlite3.Connection,
+    operator_id: int,
+    *,
+    display_name: str,
+    initials: str,
+    role: str,
+    active: bool,
+    notes: str = "",
+    audit: bool = True,
+    operator: str = "manager",
+    audit_notes: str = "",
+) -> None:
+    _validate_operator_role(role)
+    normalized_initials = initials.strip().upper()
+    if not display_name.strip():
+        raise ValueError("Operator display name is required.")
+    if not normalized_initials:
+        raise ValueError("Operator initials are required.")
+    with conn:
+        before = _operator_snapshot(conn, operator_id)
+        result = conn.execute(
+            """
+            UPDATE operators
+            SET display_name = ?, initials = ?, role = ?, active = ?, notes = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                display_name.strip(),
+                normalized_initials,
+                role,
+                1 if active else 0,
+                notes.strip(),
+                operator_id,
+            ),
+        )
+        if result.rowcount and audit:
+            after = _operator_snapshot(conn, operator_id)
+            action_type = "operator_edited"
+            if before and after and before["active"] != after["active"]:
+                action_type = "operator_reactivated" if after["active"] else "operator_deactivated"
+            add_audit_entry(
+                conn,
+                action_type=action_type,
+                entity_type="operator",
+                entity_id=operator_id,
+                before_value=before,
+                after_value=after,
+                operator=operator,
+                notes=audit_notes,
+            )
+    if result.rowcount == 0:
+        raise ValueError(f"Unknown operator_id: {operator_id}")
+
+
+def set_operator_active(
+    conn: sqlite3.Connection,
+    operator_id: int,
+    active: bool,
+    *,
+    audit: bool = True,
+    operator: str = "manager",
+    audit_notes: str = "",
+) -> None:
+    with conn:
+        before = _operator_snapshot(conn, operator_id)
+        result = conn.execute(
+            """
+            UPDATE operators
+            SET active = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (1 if active else 0, operator_id),
+        )
+        if result.rowcount and audit:
+            add_audit_entry(
+                conn,
+                action_type="operator_reactivated" if active else "operator_deactivated",
+                entity_type="operator",
+                entity_id=operator_id,
+                before_value=before,
+                after_value=_operator_snapshot(conn, operator_id),
+                operator=operator,
+                notes=audit_notes,
+            )
+    if result.rowcount == 0:
+        raise ValueError(f"Unknown operator_id: {operator_id}")
+
+
+def format_operator_label(operator: Operator) -> str:
+    return f"{operator.display_name} ({operator.initials})"
+
+
+def _operator_snapshot(conn: sqlite3.Connection, operator_id: int) -> dict[str, object] | None:
+    row = conn.execute("SELECT * FROM operators WHERE id = ?", (operator_id,)).fetchone()
+    return _row_to_dict(row)
+
+
+def _validate_operator_role(role: str) -> None:
+    if role not in {"operator", "manager", "admin"}:
+        raise ValueError("operator role must be operator, manager, or admin.")
 
 
 def list_materials(conn: sqlite3.Connection, active_only: bool = True) -> list[MaterialType]:
@@ -787,8 +1010,15 @@ def create_transaction(
 ) -> str:
     if not payload.line_items:
         raise ValueError("A transaction must include at least one line item.")
+    if payload.operator_id is None:
+        raise ValueError("An active operator is required to save a transaction.")
 
     created_at = created_at or datetime.now()
+    operator_record = get_operator(conn, payload.operator_id)
+    if not operator_record.active:
+        raise ValueError(f"Operator {operator_record.display_name} is inactive.")
+    operator_initials_snapshot = operator_record.initials
+    operator_name_snapshot = operator_record.display_name
     transaction_id = str(uuid4())
     line_rows: list[dict[str, object]] = []
     total_cents = 0
@@ -797,14 +1027,19 @@ def create_transaction(
         conn.execute(
             """
             INSERT INTO transactions (
-                id, created_at, operator_initials, payout_method, notes, status, total_cents
+                id, created_at, operator_id, operator_initials,
+                operator_display_name_snapshot, operator_initials_snapshot,
+                payout_method, notes, status, total_cents
             )
-            VALUES (?, ?, ?, ?, ?, 'active', 0)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0)
             """,
             (
                 transaction_id,
                 created_at.isoformat(timespec="seconds"),
-                payload.operator_initials.strip().upper() or "NA",
+                operator_record.id,
+                operator_initials_snapshot,
+                operator_name_snapshot,
+                operator_initials_snapshot,
                 payload.payout_method.strip() or "cash",
                 payload.notes.strip(),
             ),
@@ -861,7 +1096,8 @@ def create_transaction(
             transaction={
                 "id": transaction_id,
                 "created_at": created_at.isoformat(timespec="seconds"),
-                "operator_initials": payload.operator_initials.strip().upper() or "NA",
+                "operator_display_name": operator_name_snapshot,
+                "operator_initials": operator_initials_snapshot,
                 "payout_method": payload.payout_method.strip() or "cash",
                 "notes": payload.notes.strip(),
                 "total_cents": total_cents,

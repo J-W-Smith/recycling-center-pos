@@ -13,6 +13,11 @@
 - Audit Log CSV export using current Audit Log filters.
 - Local SQLite database backup control.
 - Cautious local SQLite restore with validation, warning, PIN confirmation, and pre-restore backup.
+- First active operator setup prompt.
+- Active operator selector on the transaction screen.
+- Operator management tab in Admin Settings.
+- Operator snapshots on transactions and receipts.
+- Daily report operator summary.
 - Material add/edit plus activate/deactivate behavior.
 - Rate add/update metadata behavior with effective dates and overlap detection.
 - Text receipt snapshot display.
@@ -21,6 +26,7 @@
 - Tests for pricing, admin configuration, receipt snapshots, transaction totals, daily reports, void handling, and cents/Decimal behavior.
 - Tests for manager PIN hashing/validation/change, audit log entries, before/after snapshots, and existing-database migrations.
 - Tests for audit CSV export, database backup copies, restore rejection, pre-restore backup creation, and valid restore replacement.
+- Tests for operator creation, migration, inactive filtering, transaction requirements, receipt snapshots, report summaries, admin audit attribution, and historical preservation.
 
 ## Deferred
 
@@ -32,7 +38,8 @@
 - Customer profile or ID capture.
 - Business-specific payout approval rules.
 - Role-protected admin access.
-- Enterprise authentication or employee-specific identity management.
+- Operator passwords or full employee authentication.
+- Role-based permission enforcement beyond the manager PIN gate.
 - Audit log signing, retention policy automation, or tamper-evidence.
 - PDF exports.
 - Installer packaging.
@@ -48,3 +55,4 @@
 - Do not hard-delete materials or rates as the default admin action.
 - Do not present local PIN protection as full security or compliance certification.
 - Do not silently restore a database without warning, PIN confirmation, and a pre-restore backup.
+- Do not treat operator selection as secure authentication.

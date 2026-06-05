@@ -8,6 +8,10 @@
 - Should rate changes require a second-person approval or manager PIN?
 - Should old rate metadata ever be locked after first use?
 - Should the manager PIN be shared by role or should each employee have a separate login?
+- What operator roles are actually needed?
+- Should operators need individual PINs or passwords later?
+- Should managers be able to save transactions, or only approve/administer?
+- Should deactivated operators remain selectable for corrections only?
 - Who should review the admin audit log and how often?
 - How long must admin/config audit logs be retained?
 - Does the audit log need export or signed/tamper-evident storage?

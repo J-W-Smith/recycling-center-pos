@@ -33,7 +33,10 @@ Audit-friendly transaction header.
 
 - `id`
 - `created_at`
+- `operator_id`
 - `operator_initials`
+- `operator_display_name_snapshot`
+- `operator_initials_snapshot`
 - `payout_method`
 - `notes`
 - `status`: `active`, `voided`, or `corrected`
@@ -70,6 +73,20 @@ Immutable receipt/internal copy snapshots.
 - `daily_report_runs`
 - `users`
 
+## `operators`
+
+Lightweight local identity records.
+
+- `display_name`
+- `initials`
+- `role`: `operator`, `manager`, or `admin`
+- `active`
+- `notes`
+- `created_at`
+- `updated_at`
+
+Operators do not have passwords in this MVP. The manager PIN still controls Admin Settings access. Transactions store operator snapshots so renaming or deactivating an operator later does not rewrite old receipts or reports.
+
 ## `app_settings`
 
 Local app-level settings.
@@ -94,7 +111,7 @@ Append-only admin/config change history.
 - `after_value`
 - `notes`
 
-Logged actions include material creation/edit/deactivation/reactivation, rate creation, rate replacement/end-dating, manager PIN creation/change, audit log export, database backup creation, and database restore attempted/completed/failed events.
+Logged actions include operator creation/edit/deactivation/reactivation, material creation/edit/deactivation/reactivation, rate creation, rate replacement/end-dating, manager PIN creation/change, audit log export, database backup creation, and database restore attempted/completed/failed events.
 
 Backup files are SQLite database copies. They contain transactions, receipt snapshots, material/rate settings, audit log entries, and app settings.
 
@@ -105,7 +122,9 @@ Backup files are SQLite database copies. They contain transactions, receipt snap
 - Store currency as integer cents.
 - Store weights and quantities as Decimal-compatible text.
 - Store receipt snapshots at transaction time.
+- Store operator display name and initials snapshots at transaction time.
 - Keep inactive materials and old rates for historical reporting.
+- Keep inactive operators for historical reporting.
 - Use effective dates so price changes do not require code changes.
 - Prevent overlapping active rate periods for the same material.
 - Keep admin audit entries append-only in the UI.

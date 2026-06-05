@@ -9,13 +9,15 @@ from app.models import LineItemInput, TransactionInput
 from app.receipt import receipt_text_to_html
 
 
-def test_receipt_snapshot_preserved_after_rate_change(conn: sqlite3.Connection) -> None:
+def test_receipt_snapshot_preserved_after_rate_change(
+    conn: sqlite3.Connection, operator_id: int
+) -> None:
     material = get_material_by_key(conn, "large_crv_count")
     tx_id = create_transaction(
         conn,
         TransactionInput(
             line_items=[LineItemInput(material.id, Decimal("3"))],
-            operator_initials="EF",
+            operator_id=operator_id,
             payout_method="cash",
             notes="snapshot test",
         ),

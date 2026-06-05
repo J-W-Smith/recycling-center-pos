@@ -13,6 +13,8 @@ The project is designed around local-first operation on an older Windows 11 Inte
 - Read-only admin audit log for material, rate, and settings changes.
 - Audit log CSV export.
 - Local SQLite database backup and cautious restore controls.
+- Operator records and active operator selection for transactions.
+- Operator snapshots on transactions, receipts, reports, and audit entries.
 - CRV and non-CRV line items tracked separately.
 - Count, weight, and manual payout line items.
 - Transaction save flow with receipt snapshot text stored at transaction time.
@@ -23,6 +25,7 @@ The project is designed around local-first operation on an older Windows 11 Inte
 - Focused pytest coverage for pricing, admin config, receipts, reports, transactions, and Decimal/cents handling.
 - Focused tests for manager PIN hashing/validation and admin audit logging.
 - Focused tests for audit CSV export and local database backup/restore behavior.
+- Focused tests for operator identity, snapshots, reports, and audit attribution.
 
 ## Quickstart
 
@@ -44,6 +47,10 @@ Open the app and use `Admin Settings`.
 
 The first time Admin Settings is opened, the app prompts for a manager PIN. The PIN is stored locally as a salted PBKDF2-SHA256 hash, not plain text. Later Admin Settings access requires that PIN. The PIN can be changed from the Settings tab after entering the current PIN.
 
+On first app launch, if no active operator exists, the app prompts to create one. Operators are not password accounts yet. They identify who performed transactions and admin changes. The manager PIN remains the gate for Admin Settings.
+
+Use the Operators tab in Admin Settings to add/edit operators, set initials, assign a lightweight role (`operator`, `manager`, or `admin`), and deactivate/reactivate operators. Operators are deactivated instead of deleted so historical transactions and audit records remain understandable.
+
 Materials can be added, edited, deactivated, or reactivated. Deactivated materials are hidden from new transaction input but remain in historical transactions and reports.
 
 Rates are effective-dated. Add a new rate with a start date when the shop price or CRV configuration changes. Use the replacement option to end-date the previous active rate automatically. Old rates are not hard-deleted because old transactions, receipts, and audit review may need to show the rate that was in force at the time.
@@ -52,7 +59,7 @@ The app warns when an active rate period overlaps another active period for the 
 
 Startup seed data creates missing defaults only. It should not reactivate or overwrite materials that were later changed in Admin Settings.
 
-The Audit Log tab shows newest entries first and records material creation/edit/deactivation/reactivation, rate creation/replacement/end-date changes, manager PIN creation/change events, audit CSV exports, backups, and restore attempts/completions/failures. Audit entries keep before/after JSON snapshots where available.
+The Audit Log tab shows newest entries first and records operator, material, rate, and settings changes. It also records manager PIN creation/change events, audit CSV exports, backups, and restore attempts/completions/failures. Audit entries use the selected operator when available and keep before/after JSON snapshots where available.
 
 Use `Export CSV` in the Audit Log tab to save the currently filtered audit view. The default filename is `audit_log_YYYY-MM-DD_HHMMSS.csv`.
 
@@ -68,7 +75,9 @@ Restore is intentionally cautious. The manager chooses a backup file, sees a war
 - Runtime databases, logs, exports, and caches are git-ignored.
 - No cloud service is required for the MVP.
 - Receipts are snapshotted so later rate changes do not alter old transaction records.
+- Operator display name and initials are snapshotted on each transaction.
 - Old materials and rates are retained for audit/history instead of hard-deleted.
+- Inactive operators are hidden from new transactions but retained for history.
 - Admin settings are protected by local PIN access control.
 - Backups are local SQLite copies and are not cloud-synced by the app.
 - Currency is stored as integer cents.
@@ -81,12 +90,12 @@ This repository is not a compliance-certified system. California CRV rules, cert
 The initial CRV assumptions are planning placeholders only.
 The admin screen makes CRV values configurable, but it does not replace compliance review.
 
-The manager PIN is local workstation access control for the MVP. It is not enterprise-grade identity management, does not identify individual employees, and does not replace OS account security, backups, disk encryption, or production audit controls. Restoring an old backup can roll back operational records, so restore should be manager-only and documented in operating procedures.
+The manager PIN is local workstation access control for the MVP. Operator selection identifies who did the work, but it is not a password login and does not prevent impersonation by itself. This does not replace OS account security, backups, disk encryption, employee-specific authentication, or production audit controls. Restoring an old backup can roll back operational records, so restore should be manager-only and documented in operating procedures.
 
 ## Intentionally Not Built Yet
 
 - Employee authentication and permissions.
-- Individual admin/operator identity tracking.
+- Operator passwords or individual login enforcement.
 - Scale integration.
 - Cash drawer integration.
 - Thermal receipt printer integration.

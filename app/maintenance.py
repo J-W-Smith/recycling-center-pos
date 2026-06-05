@@ -12,6 +12,7 @@ EXPECTED_DATABASE_TABLES = {
     "transactions",
     "transaction_line_items",
     "material_types",
+    "operators",
     "rates",
     "app_settings",
     "audit_log",

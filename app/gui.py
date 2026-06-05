@@ -12,19 +12,25 @@ from app.db import (
     change_manager_pin,
     create_manager_pin,
     create_material_type,
+    create_operator,
     create_transaction,
     fetch_transaction,
+    format_operator_label,
     get_current_rate,
     has_manager_pin,
+    has_active_operator,
     list_audit_entries,
     list_materials,
+    list_operators,
     list_rates,
     set_material_active,
+    set_operator_active,
     update_material_type,
+    update_operator,
     update_rate_metadata,
     verify_manager_pin,
 )
-from app.models import LineItemInput, MaterialType, TransactionInput
+from app.models import LineItemInput, MaterialType, Operator, TransactionInput
 from app.maintenance import (
     create_database_backup,
     default_audit_export_name,
@@ -48,11 +54,16 @@ class RecyclingPOSApp(tk.Tk):
         self.materials: list[MaterialType] = []
         self.material_by_label: dict[str, MaterialType] = {}
         self.material_by_id: dict[int, MaterialType] = {}
+        self.operators: list[Operator] = []
+        self.operator_by_label: dict[str, Operator] = {}
         self.pending_items: list[LineItemInput] = []
         self.material_combo: ttk.Combobox | None = None
+        self.operator_combo: ttk.Combobox | None = None
         self._build_style()
         self.refresh_material_choices()
+        self.refresh_operator_choices()
         self._build()
+        self.after(100, self.ensure_first_operator)
 
     def _build_style(self) -> None:
         style = ttk.Style(self)
@@ -121,9 +132,16 @@ class RecyclingPOSApp(tk.Tk):
 
         meta = ttk.Frame(root)
         meta.pack(fill="x", pady=(0, 8))
-        ttk.Label(meta, text="Operator initials").grid(row=0, column=0, sticky="w")
-        self.operator_var = tk.StringVar(value="NA")
-        ttk.Entry(meta, textvariable=self.operator_var, width=12).grid(
+        ttk.Label(meta, text="Operator").grid(row=0, column=0, sticky="w")
+        self.operator_var = tk.StringVar(value=next(iter(self.operator_by_label), ""))
+        self.operator_combo = ttk.Combobox(
+            meta,
+            textvariable=self.operator_var,
+            values=list(self.operator_by_label),
+            width=32,
+            state="readonly",
+        )
+        self.operator_combo.grid(
             row=1, column=0, sticky="w", padx=(0, 8)
         )
         ttk.Label(meta, text="Payout method").grid(row=0, column=1, sticky="w")
@@ -174,6 +192,65 @@ class RecyclingPOSApp(tk.Tk):
             labels = list(self.material_by_label)
             self.material_combo.configure(values=labels)
             self.material_var.set(labels[0] if labels else "")
+
+    def refresh_operator_choices(self) -> None:
+        self.operators = list_operators(self.conn, active_only=True)
+        self.operator_by_label = {
+            format_operator_label(operator): operator for operator in self.operators
+        }
+        if self.operator_combo is not None:
+            current = self.operator_var.get()
+            labels = list(self.operator_by_label)
+            self.operator_combo.configure(values=labels)
+            if current in self.operator_by_label:
+                self.operator_var.set(current)
+            else:
+                self.operator_var.set(labels[0] if labels else "")
+
+    def ensure_first_operator(self) -> None:
+        if has_active_operator(self.conn):
+            return
+        name = simpledialog.askstring(
+            "Create First Operator",
+            "No active operator exists. Enter the first operator name:",
+            parent=self,
+        )
+        if not name:
+            messagebox.showerror(
+                "Operator required",
+                "Create an operator before saving transactions.",
+            )
+            return
+        initials = simpledialog.askstring(
+            "Create First Operator",
+            "Enter operator initials:",
+            parent=self,
+        )
+        if not initials:
+            messagebox.showerror(
+                "Operator required",
+                "Operator initials are required.",
+            )
+            return
+        try:
+            create_operator(
+                self.conn,
+                display_name=name,
+                initials=initials,
+                role="manager",
+                audit=False,
+            )
+        except ValueError as exc:
+            messagebox.showerror("Operator setup failed", str(exc))
+            return
+        self.refresh_operator_choices()
+
+    def current_operator(self) -> Operator | None:
+        return self.operator_by_label.get(self.operator_var.get())
+
+    def current_operator_audit_label(self) -> str:
+        operator = self.current_operator()
+        return format_operator_label(operator) if operator is not None else "manager"
 
     def add_line_item(self) -> None:
         material = self.material_by_label.get(self.material_var.get())
@@ -229,12 +306,16 @@ class RecyclingPOSApp(tk.Tk):
         if not self.pending_items:
             messagebox.showerror("No line items", "Add at least one line item.")
             return
+        operator = self.current_operator()
+        if operator is None:
+            messagebox.showerror("Operator required", "Select an active operator.")
+            return
         try:
             tx_id = create_transaction(
                 self.conn,
                 TransactionInput(
                     line_items=self.pending_items,
-                    operator_initials=self.operator_var.get(),
+                    operator_id=operator.id,
                     payout_method=self.payout_var.get(),
                     notes=self.notes_var.get(),
                 ),
@@ -288,7 +369,11 @@ class RecyclingPOSApp(tk.Tk):
                 messagebox.showerror("PIN setup failed", "Manager PIN entries did not match.")
                 return False
             try:
-                create_manager_pin(self.conn, pin)
+                create_manager_pin(
+                    self.conn,
+                    pin,
+                    operator=self.current_operator_audit_label(),
+                )
             except ValueError as exc:
                 messagebox.showerror("PIN setup failed", str(exc))
                 return False
@@ -319,11 +404,12 @@ class AdminSettingsWindow(tk.Toplevel):
         self.configure(background="#c0c0c0")
         self.selected_material_id: int | None = None
         self.selected_rate_id: int | None = None
+        self.selected_operator_id: int | None = None
         self.material_rate_labels: dict[str, MaterialType] = {}
         self._build()
         self.refresh_materials()
         self.refresh_rates()
-        self.refresh_audit_log()
+        self.refresh_operators()
         self.refresh_audit_log()
 
     def _build(self) -> None:
@@ -331,14 +417,17 @@ class AdminSettingsWindow(tk.Toplevel):
         tabs.pack(fill="both", expand=True, padx=8, pady=8)
         self.material_tab = ttk.Frame(tabs, padding=8)
         self.rate_tab = ttk.Frame(tabs, padding=8)
+        self.operator_tab = ttk.Frame(tabs, padding=8)
         self.audit_tab = ttk.Frame(tabs, padding=8)
         self.settings_tab = ttk.Frame(tabs, padding=8)
         tabs.add(self.material_tab, text="Materials")
         tabs.add(self.rate_tab, text="Rates")
+        tabs.add(self.operator_tab, text="Operators")
         tabs.add(self.audit_tab, text="Audit Log")
         tabs.add(self.settings_tab, text="Settings")
         self._build_material_tab()
         self._build_rate_tab()
+        self._build_operator_tab()
         self._build_audit_tab()
         self._build_settings_tab()
 
@@ -487,6 +576,70 @@ class AdminSettingsWindow(tk.Toplevel):
             side="left", padx=(8, 0)
         )
 
+    def _build_operator_tab(self) -> None:
+        self.operator_tree = ttk.Treeview(
+            self.operator_tab,
+            columns=("id", "name", "initials", "role", "active", "notes"),
+            show="headings",
+            height=10,
+        )
+        headings = (
+            ("id", "ID", 45),
+            ("name", "Display Name", 250),
+            ("initials", "Initials", 80),
+            ("role", "Role", 90),
+            ("active", "Active", 70),
+            ("notes", "Notes", 350),
+        )
+        for col, label, width in headings:
+            self.operator_tree.heading(col, text=label)
+            self.operator_tree.column(col, width=width, anchor="w")
+        self.operator_tree.pack(fill="x", pady=(0, 8))
+        self.operator_tree.bind("<<TreeviewSelect>>", self.on_operator_select)
+
+        form = ttk.Frame(self.operator_tab)
+        form.pack(fill="x")
+        self.operator_name = tk.StringVar()
+        self.operator_initials = tk.StringVar()
+        self.operator_role = tk.StringVar(value="operator")
+        self.operator_active = tk.BooleanVar(value=True)
+        self.operator_notes = tk.StringVar()
+
+        ttk.Label(form, text="Display name").grid(row=0, column=0, sticky="w")
+        ttk.Entry(form, textvariable=self.operator_name, width=34).grid(
+            row=1, column=0, sticky="we", padx=(0, 8), pady=(0, 6)
+        )
+        ttk.Label(form, text="Initials").grid(row=0, column=1, sticky="w")
+        ttk.Entry(form, textvariable=self.operator_initials, width=10).grid(
+            row=1, column=1, sticky="w", padx=(0, 8), pady=(0, 6)
+        )
+        ttk.Label(form, text="Role").grid(row=0, column=2, sticky="w")
+        ttk.Combobox(
+            form,
+            textvariable=self.operator_role,
+            values=["operator", "manager", "admin"],
+            state="readonly",
+            width=12,
+        ).grid(row=1, column=2, sticky="w", padx=(0, 8), pady=(0, 6))
+        ttk.Checkbutton(form, text="Active", variable=self.operator_active).grid(
+            row=1, column=3, sticky="w"
+        )
+        ttk.Label(form, text="Notes").grid(row=2, column=0, sticky="w")
+        ttk.Entry(form, textvariable=self.operator_notes, width=82).grid(
+            row=3, column=0, columnspan=3, sticky="we", padx=(0, 8), pady=(0, 6)
+        )
+        form.columnconfigure(0, weight=1)
+
+        buttons = ttk.Frame(self.operator_tab)
+        buttons.pack(fill="x", pady=(8, 0))
+        ttk.Button(buttons, text="New", command=self.clear_operator_form).pack(side="left")
+        ttk.Button(buttons, text="Save Operator", command=self.save_operator).pack(
+            side="left", padx=(8, 0)
+        )
+        ttk.Button(buttons, text="Toggle Active", command=self.toggle_operator_active).pack(
+            side="left", padx=(8, 0)
+        )
+
     def _build_audit_tab(self) -> None:
         filters = ttk.Frame(self.audit_tab)
         filters.pack(fill="x", pady=(0, 8))
@@ -495,7 +648,7 @@ class AdminSettingsWindow(tk.Toplevel):
         ttk.Combobox(
             filters,
             textvariable=self.audit_filter,
-            values=["all", "material_type", "rate", "settings"],
+            values=["all", "material_type", "rate", "operator", "settings"],
             state="readonly",
             width=18,
         ).pack(side="left")
@@ -625,6 +778,93 @@ class AdminSettingsWindow(tk.Toplevel):
                 ),
             )
 
+    def refresh_operators(self) -> None:
+        for item in self.operator_tree.get_children():
+            self.operator_tree.delete(item)
+        for operator in list_operators(self.conn, active_only=False):
+            self.operator_tree.insert(
+                "",
+                "end",
+                iid=str(operator.id),
+                values=(
+                    operator.id,
+                    operator.display_name,
+                    operator.initials,
+                    operator.role,
+                    "yes" if operator.active else "no",
+                    operator.notes,
+                ),
+            )
+        self.app.refresh_operator_choices()
+
+    def on_operator_select(self, _event: tk.Event) -> None:
+        selected = self.operator_tree.selection()
+        if not selected:
+            return
+        self.selected_operator_id = int(selected[0])
+        operator = next(
+            item
+            for item in list_operators(self.conn, active_only=False)
+            if item.id == self.selected_operator_id
+        )
+        self.operator_name.set(operator.display_name)
+        self.operator_initials.set(operator.initials)
+        self.operator_role.set(operator.role)
+        self.operator_active.set(operator.active)
+        self.operator_notes.set(operator.notes)
+
+    def clear_operator_form(self) -> None:
+        self.selected_operator_id = None
+        self.operator_tree.selection_remove(self.operator_tree.selection())
+        self.operator_name.set("")
+        self.operator_initials.set("")
+        self.operator_role.set("operator")
+        self.operator_active.set(True)
+        self.operator_notes.set("")
+
+    def save_operator(self) -> None:
+        audit_operator = self.app.current_operator_audit_label()
+        try:
+            if self.selected_operator_id is None:
+                create_operator(
+                    self.conn,
+                    display_name=self.operator_name.get(),
+                    initials=self.operator_initials.get(),
+                    role=self.operator_role.get(),
+                    active=self.operator_active.get(),
+                    notes=self.operator_notes.get(),
+                    operator=audit_operator,
+                )
+            else:
+                update_operator(
+                    self.conn,
+                    self.selected_operator_id,
+                    display_name=self.operator_name.get(),
+                    initials=self.operator_initials.get(),
+                    role=self.operator_role.get(),
+                    active=self.operator_active.get(),
+                    notes=self.operator_notes.get(),
+                    operator=audit_operator,
+                )
+        except ValueError as exc:
+            messagebox.showerror("Operator validation", str(exc))
+            return
+        self.refresh_operators()
+        self.refresh_audit_log()
+
+    def toggle_operator_active(self) -> None:
+        if self.selected_operator_id is None:
+            messagebox.showerror("No operator selected", "Select an operator first.")
+            return
+        set_operator_active(
+            self.conn,
+            self.selected_operator_id,
+            not self.operator_active.get(),
+            operator=self.app.current_operator_audit_label(),
+        )
+        self.refresh_operators()
+        self.refresh_audit_log()
+
     def on_material_select(self, _event: tk.Event) -> None:
         selected = self.material_tree.selection()
         if not selected:
@@ -670,6 +910,7 @@ class AdminSettingsWindow(tk.Toplevel):
                     active=self.material_active.get(),
                     sort_order=sort_order,
                     notes=self.material_notes.get(),
+                    operator=self.app.current_operator_audit_label(),
                 )
             else:
                 update_material_type(
@@ -683,6 +924,7 @@ class AdminSettingsWindow(tk.Toplevel):
                     active=self.material_active.get(),
                     sort_order=sort_order,
                     notes=self.material_notes.get(),
+                    operator=self.app.current_operator_audit_label(),
                 )
         except ValueError as exc:
             messagebox.showerror("Material validation", str(exc))
@@ -694,7 +936,12 @@ class AdminSettingsWindow(tk.Toplevel):
         if self.selected_material_id is None:
             messagebox.showerror("No material selected", "Select a material first.")
             return
-        set_material_active(self.conn, self.selected_material_id, not self.material_active.get())
+        set_material_active(
+            self.conn,
+            self.selected_material_id,
+            not self.material_active.get(),
+            operator=self.app.current_operator_audit_label(),
+        )
         self.refresh_materials()
         self.refresh_audit_log()
 
@@ -739,6 +986,7 @@ class AdminSettingsWindow(tk.Toplevel):
                 active=self.rate_active.get(),
                 notes=self.rate_notes.get(),
                 replace_current=self.rate_replace.get(),
+                operator=self.app.current_operator_audit_label(),
             )
         except (InvalidOperation, ValueError) as exc:
             messagebox.showerror("Rate validation", str(exc))
@@ -758,6 +1006,7 @@ class AdminSettingsWindow(tk.Toplevel):
                 effective_to=self.rate_end.get() or None,
                 active=self.rate_active.get(),
                 notes=self.rate_notes.get(),
+                operator=self.app.current_operator_audit_label(),
             )
         except ValueError as exc:
             messagebox.showerror("Rate validation", str(exc))
@@ -811,7 +1060,12 @@ class AdminSettingsWindow(tk.Toplevel):
             messagebox.showerror("PIN change failed", "New PIN entries did not match.")
             return
         try:
-            change_manager_pin(self.conn, self.current_pin.get(), self.new_pin.get())
+            change_manager_pin(
+                self.conn,
+                self.current_pin.get(),
+                self.new_pin.get(),
+                operator=self.app.current_operator_audit_label(),
+            )
         except ValueError as exc:
             messagebox.showerror("PIN change failed", str(exc))
             return
@@ -835,7 +1089,12 @@ class AdminSettingsWindow(tk.Toplevel):
         if not path:
             return
         try:
-            export_audit_log_csv(self.conn, path, entity_type=entity_type)
+            export_audit_log_csv(
+                self.conn,
+                path,
+                entity_type=entity_type,
+                operator=self.app.current_operator_audit_label(),
+            )
         except OSError as exc:
             messagebox.showerror("Audit export failed", str(exc))
             return
@@ -856,7 +1115,11 @@ class AdminSettingsWindow(tk.Toplevel):
         if not path:
             return
         try:
-            create_database_backup(self.conn, path)
+            create_database_backup(
+                self.conn,
+                path,
+                operator=self.app.current_operator_audit_label(),
+            )
         except (OSError, ValueError, sqlite3.DatabaseError) as exc:
             messagebox.showerror("Backup failed", str(exc))
             return
@@ -894,7 +1157,12 @@ class AdminSettingsWindow(tk.Toplevel):
         backup_dir = (db_path.parent if db_path is not None else Path("data")) / "backups"
         pre_restore_path = backup_dir / default_pre_restore_backup_name()
         try:
-            restore_database_from_backup(self.conn, restore_path, pre_restore_path)
+            restore_database_from_backup(
+                self.conn,
+                restore_path,
+                pre_restore_path,
+                operator=self.app.current_operator_audit_label(),
+            )
         except (OSError, ValueError, sqlite3.DatabaseError) as exc:
             self.refresh_audit_log()
             messagebox.showerror("Restore failed", str(exc))

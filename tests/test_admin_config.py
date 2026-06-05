@@ -46,7 +46,7 @@ def test_create_custom_material_type(conn: sqlite3.Connection) -> None:
 
 
 def test_deactivate_material_hides_from_active_list_and_blocks_new_transactions(
-    conn: sqlite3.Connection,
+    conn: sqlite3.Connection, operator_id: int
 ) -> None:
     material = get_material_by_key(conn, "scrap_aluminum_weight")
 
@@ -60,7 +60,7 @@ def test_deactivate_material_hides_from_active_list_and_blocks_new_transactions(
             conn,
             TransactionInput(
                 line_items=[LineItemInput(material.id, Decimal("2"))],
-                operator_initials="OP",
+                operator_id=operator_id,
             ),
             created_at=datetime(2026, 6, 4, 9, 0, 0),
         )
@@ -103,7 +103,9 @@ def test_overlapping_active_rate_period_is_detected(conn: sqlite3.Connection) ->
         )
 
 
-def test_transaction_uses_current_effective_rate(conn: sqlite3.Connection) -> None:
+def test_transaction_uses_current_effective_rate(
+    conn: sqlite3.Connection, operator_id: int
+) -> None:
     material = get_material_by_key(conn, "plastic_crv_count_small")
     add_rate(
         conn,
@@ -117,7 +119,7 @@ def test_transaction_uses_current_effective_rate(conn: sqlite3.Connection) -> No
         conn,
         TransactionInput(
             line_items=[LineItemInput(material.id, Decimal("10"))],
-            operator_initials="QR",
+            operator_id=operator_id,
         ),
         created_at=datetime(2026, 7, 2, 10, 0, 0),
     )
@@ -128,14 +130,14 @@ def test_transaction_uses_current_effective_rate(conn: sqlite3.Connection) -> No
 
 
 def test_receipt_snapshot_does_not_change_after_later_admin_rate_update(
-    conn: sqlite3.Connection,
+    conn: sqlite3.Connection, operator_id: int
 ) -> None:
     material = get_material_by_key(conn, "large_crv_count")
     tx_id = create_transaction(
         conn,
         TransactionInput(
             line_items=[LineItemInput(material.id, Decimal("3"))],
-            operator_initials="ST",
+            operator_id=operator_id,
         ),
         created_at=datetime(2026, 6, 4, 12, 0, 0),
     )
@@ -154,7 +156,9 @@ def test_receipt_snapshot_does_not_change_after_later_admin_rate_update(
     assert "TOTAL PAID: $0.30" in after
 
 
-def test_daily_report_includes_custom_material(conn: sqlite3.Connection) -> None:
+def test_daily_report_includes_custom_material(
+    conn: sqlite3.Connection, operator_id: int
+) -> None:
     material_id = create_material_type(
         conn,
         display_name="Brass scrap by weight",
@@ -174,7 +178,7 @@ def test_daily_report_includes_custom_material(conn: sqlite3.Connection) -> None
         conn,
         TransactionInput(
             line_items=[LineItemInput(material_id, Decimal("2.5"))],
-            operator_initials="UV",
+            operator_id=operator_id,
         ),
         created_at=datetime(2026, 6, 4, 13, 0, 0),
     )

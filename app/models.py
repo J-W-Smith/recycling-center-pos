@@ -7,6 +7,7 @@ from typing import Literal
 
 UnitType = Literal["weight", "count", "manual"]
 TransactionStatus = Literal["active", "voided", "corrected"]
+OperatorRole = Literal["operator", "manager", "admin"]
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,18 @@ class Rate:
 
 
 @dataclass(frozen=True)
+class Operator:
+    id: int
+    display_name: str
+    initials: str
+    role: OperatorRole
+    active: bool = True
+    notes: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass(frozen=True)
 class LineItemInput:
     material_type_id: int
     quantity: Decimal
@@ -46,6 +59,7 @@ class LineItemInput:
 @dataclass(frozen=True)
 class TransactionInput:
     line_items: list[LineItemInput]
-    operator_initials: str
+    operator_id: int | None = None
+    operator_initials: str = ""
     payout_method: str = "cash"
     notes: str = ""

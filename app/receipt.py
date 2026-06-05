@@ -20,7 +20,7 @@ def build_receipt_text(
         "-" * 42,
         f"Date/Time: {transaction['created_at']}",
         f"Transaction ID: {transaction['id']}",
-        f"Operator: {transaction['operator_initials']}",
+        f"Operator: {_operator_label(transaction)}",
         f"Payout Method: {transaction['payout_method']}",
         "-" * 42,
     ]
@@ -52,6 +52,14 @@ def build_receipt_text(
     return "\n".join(lines)
 
 
+def _operator_label(transaction: Mapping[str, object]) -> str:
+    display_name = str(transaction.get("operator_display_name", "")).strip()
+    initials = str(transaction.get("operator_initials", "")).strip()
+    if display_name and initials:
+        return f"{display_name} ({initials})"
+    return initials or display_name or "Unknown"
+
+
 def receipt_text_to_html(receipt_text: str) -> str:
     return f"""<!doctype html>
 <html lang="en">
@@ -70,4 +78,3 @@ def receipt_text_to_html(receipt_text: str) -> str:
 </body>
 </html>
 """
-

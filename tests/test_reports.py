@@ -9,7 +9,9 @@ from app.models import LineItemInput, TransactionInput
 from app.reports import export_daily_report_csv, generate_daily_report, render_daily_report_html
 
 
-def test_daily_report_grouping_by_material_type(conn: sqlite3.Connection, tmp_path) -> None:
+def test_daily_report_grouping_by_material_type(
+    conn: sqlite3.Connection, operator_id: int, tmp_path
+) -> None:
     aluminum = get_material_by_key(conn, "aluminum_crv_count_small")
     scrap = get_material_by_key(conn, "scrap_aluminum_weight")
 
@@ -20,7 +22,7 @@ def test_daily_report_grouping_by_material_type(conn: sqlite3.Connection, tmp_pa
                 LineItemInput(aluminum.id, Decimal("10")),
                 LineItemInput(scrap.id, Decimal("4")),
             ],
-            operator_initials="GH",
+            operator_id=operator_id,
         ),
         created_at=datetime(2026, 6, 4, 9, 0, 0),
     )
@@ -28,7 +30,7 @@ def test_daily_report_grouping_by_material_type(conn: sqlite3.Connection, tmp_pa
         conn,
         TransactionInput(
             line_items=[LineItemInput(aluminum.id, Decimal("15"))],
-            operator_initials="IJ",
+            operator_id=operator_id,
         ),
         created_at=datetime(2026, 6, 4, 13, 0, 0),
     )
@@ -42,6 +44,8 @@ def test_daily_report_grouping_by_material_type(conn: sqlite3.Connection, tmp_pa
     assert groups["Scrap aluminum by weight, non-CRV"]["quantity_total"] == "4"
     assert groups["Scrap aluminum by weight, non-CRV"]["total_cents"] == 320
     assert report["grand_total_cents"] == 445
+    assert report["operator_summaries"][0]["operator_label"] == "Test Operator (TO)"
+    assert report["operator_summaries"][0]["transaction_count"] == 2
 
     csv_path = export_daily_report_csv(report, tmp_path / "daily.csv")
     html = render_daily_report_html(report)
@@ -50,13 +54,15 @@ def test_daily_report_grouping_by_material_type(conn: sqlite3.Connection, tmp_pa
     assert "Grand Total: $4.45" in html
 
 
-def test_voided_transactions_excluded_and_separately_shown(conn: sqlite3.Connection) -> None:
+def test_voided_transactions_excluded_and_separately_shown(
+    conn: sqlite3.Connection, operator_id: int
+) -> None:
     material = get_material_by_key(conn, "plastic_crv_count_small")
     active_id = create_transaction(
         conn,
         TransactionInput(
             line_items=[LineItemInput(material.id, Decimal("10"))],
-            operator_initials="KL",
+            operator_id=operator_id,
         ),
         created_at=datetime(2026, 6, 4, 14, 0, 0),
     )
@@ -64,7 +70,7 @@ def test_voided_transactions_excluded_and_separately_shown(conn: sqlite3.Connect
         conn,
         TransactionInput(
             line_items=[LineItemInput(material.id, Decimal("10"))],
-            operator_initials="MN",
+            operator_id=operator_id,
         ),
         created_at=datetime(2026, 6, 4, 15, 0, 0),
     )
@@ -76,5 +82,5 @@ def test_voided_transactions_excluded_and_separately_shown(conn: sqlite3.Connect
     assert report["grand_total_cents"] == 50
     assert len(report["voided_transactions"]) == 1
     assert report["voided_transactions"][0]["transaction_id"] == voided_id
+    assert report["voided_transactions"][0]["operator"] == "Test Operator (TO)"
     assert report["voided_transactions"][0]["line_total_cents"] == 50
-
