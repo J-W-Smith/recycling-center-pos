@@ -16,6 +16,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "create_backup",
         "restore_backup",
         "change_manager_pin",
+        "manage_operator_pin_settings",
     },
     "admin": {
         "access_admin_settings",
@@ -26,6 +27,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "create_backup",
         "restore_backup",
         "change_manager_pin",
+        "manage_operator_pin_settings",
     },
 }
 

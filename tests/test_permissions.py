@@ -25,6 +25,7 @@ ADMIN_PERMISSIONS = {
     "create_backup",
     "restore_backup",
     "change_manager_pin",
+    "manage_operator_pin_settings",
 }
 
 
@@ -118,4 +119,3 @@ def test_backup_restore_and_audit_export_require_admin_permissions(
     for permission in ("create_backup", "restore_backup", "export_audit_log"):
         assert not has_permission(operator, permission)
         assert has_permission(manager, permission)
-

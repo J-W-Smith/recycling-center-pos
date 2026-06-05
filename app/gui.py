@@ -8,8 +8,11 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from app.db import (
+    REQUIRE_OPERATOR_PIN_ADMIN_KEY,
+    REQUIRE_OPERATOR_PIN_TRANSACTIONS_KEY,
     add_rate,
     change_manager_pin,
+    clear_operator_pin,
     create_manager_pin,
     create_material_type,
     create_operator,
@@ -17,18 +20,22 @@ from app.db import (
     fetch_transaction,
     format_operator_label,
     get_current_rate,
+    get_bool_setting,
     has_manager_pin,
     has_active_operator,
     list_audit_entries,
     list_materials,
     list_operators,
     list_rates,
+    set_bool_setting,
     set_material_active,
     set_operator_active,
+    set_operator_pin,
     update_material_type,
     update_operator,
     update_rate_metadata,
     verify_manager_pin,
+    verify_operator_pin,
 )
 from app.models import LineItemInput, MaterialType, Operator, TransactionInput
 from app.maintenance import (
@@ -57,6 +64,7 @@ class RecyclingPOSApp(tk.Tk):
         self.material_by_id: dict[int, MaterialType] = {}
         self.operators: list[Operator] = []
         self.operator_by_label: dict[str, Operator] = {}
+        self.verified_operator_id: int | None = None
         self.pending_items: list[LineItemInput] = []
         self.material_combo: ttk.Combobox | None = None
         self.operator_combo: ttk.Combobox | None = None
@@ -145,20 +153,28 @@ class RecyclingPOSApp(tk.Tk):
         self.operator_combo.grid(
             row=1, column=0, sticky="w", padx=(0, 8)
         )
-        ttk.Label(meta, text="Payout method").grid(row=0, column=1, sticky="w")
-        self.payout_var = tk.StringVar(value="cash")
-        ttk.Entry(meta, textvariable=self.payout_var, width=16).grid(
+        self.operator_combo.bind("<<ComboboxSelected>>", self.on_operator_changed)
+        self.operator_status_var = tk.StringVar(value="No operator selected")
+        ttk.Button(meta, text="Verify Operator", command=self.verify_selected_operator).grid(
             row=1, column=1, sticky="w", padx=(0, 8)
         )
-        ttk.Label(meta, text="Transaction notes").grid(row=0, column=2, sticky="w")
+        ttk.Label(meta, textvariable=self.operator_status_var).grid(
+            row=0, column=1, sticky="w", padx=(0, 8)
+        )
+        ttk.Label(meta, text="Payout method").grid(row=0, column=2, sticky="w")
+        self.payout_var = tk.StringVar(value="cash")
+        ttk.Entry(meta, textvariable=self.payout_var, width=16).grid(
+            row=1, column=2, sticky="w", padx=(0, 8)
+        )
+        ttk.Label(meta, text="Transaction notes").grid(row=0, column=3, sticky="w")
         self.notes_var = tk.StringVar()
         ttk.Entry(meta, textvariable=self.notes_var, width=56).grid(
-            row=1, column=2, sticky="we", padx=(0, 8)
+            row=1, column=3, sticky="we", padx=(0, 8)
         )
         ttk.Button(meta, text="Save Transaction", command=self.save_transaction).grid(
-            row=1, column=3, sticky="e"
+            row=1, column=4, sticky="e"
         )
-        meta.columnconfigure(2, weight=1)
+        meta.columnconfigure(3, weight=1)
 
         actions = ttk.Frame(root)
         actions.pack(fill="x", pady=(0, 8))
@@ -180,6 +196,7 @@ class RecyclingPOSApp(tk.Tk):
             "1.0",
             "MVP ready. Add line items, save a transaction, then print/export from snapshots.\n",
         )
+        self.update_operator_status()
 
     def _label(self, material: MaterialType) -> str:
         crv = "CRV" if material.crv_eligible else "non-CRV"
@@ -207,6 +224,10 @@ class RecyclingPOSApp(tk.Tk):
                 self.operator_var.set(current)
             else:
                 self.operator_var.set(labels[0] if labels else "")
+            current_operator = self.current_operator()
+            if current_operator is None or current_operator.id != self.verified_operator_id:
+                self.verified_operator_id = None
+            self.update_operator_status()
 
     def ensure_first_operator(self) -> None:
         if has_active_operator(self.conn):
@@ -233,18 +254,26 @@ class RecyclingPOSApp(tk.Tk):
                 "Operator initials are required.",
             )
             return
+        operator_pin = simpledialog.askstring(
+            "Create First Operator",
+            "Optional: enter an individual operator PIN, or leave blank to skip:",
+            show="*",
+            parent=self,
+        )
         try:
             create_operator(
                 self.conn,
                 display_name=name,
                 initials=initials,
                 role="manager",
+                initial_pin=operator_pin or None,
                 audit=False,
             )
         except ValueError as exc:
             messagebox.showerror("Operator setup failed", str(exc))
             return
         self.refresh_operator_choices()
+        self.update_operator_status()
 
     def current_operator(self) -> Operator | None:
         return self.operator_by_label.get(self.operator_var.get())
@@ -252,6 +281,60 @@ class RecyclingPOSApp(tk.Tk):
     def current_operator_audit_label(self) -> str:
         operator = self.current_operator()
         return format_operator_label(operator) if operator is not None else "manager"
+
+    def on_operator_changed(self, _event: tk.Event) -> None:
+        self.verified_operator_id = None
+        self.update_operator_status()
+
+    def update_operator_status(self) -> None:
+        if not hasattr(self, "operator_status_var"):
+            return
+        operator = self.current_operator()
+        if operator is None:
+            self.operator_status_var.set("No operator selected")
+        elif not operator.pin_set:
+            self.operator_status_var.set("PIN not set")
+        elif self.verified_operator_id == operator.id:
+            self.operator_status_var.set("Verified")
+        else:
+            self.operator_status_var.set("Verification required")
+
+    def verify_selected_operator(self) -> bool:
+        operator = self.current_operator()
+        if operator is None:
+            messagebox.showerror("Operator required", "Select an active operator.")
+            return False
+        if not operator.pin_set:
+            self.verified_operator_id = None
+            self.update_operator_status()
+            messagebox.showinfo("PIN not set", "This operator does not have an individual PIN.")
+            return False
+        pin = simpledialog.askstring(
+            "Operator PIN",
+            f"Enter PIN for {format_operator_label(operator)}:",
+            show="*",
+            parent=self,
+        )
+        if pin is None:
+            return False
+        verified = verify_operator_pin(
+            self.conn,
+            operator.id,
+            pin,
+            operator=format_operator_label(operator),
+            audit=True,
+        )
+        if verified:
+            self.verified_operator_id = operator.id
+            self.update_operator_status()
+            return True
+        self.verified_operator_id = None
+        self.update_operator_status()
+        messagebox.showerror("Verification failed", "Incorrect operator PIN.")
+        return False
+
+    def operator_is_verified(self, operator: Operator) -> bool:
+        return operator.pin_set and self.verified_operator_id == operator.id
 
     def require_permission(self, permission: str, action_label: str) -> bool:
         operator = self.current_operator()
@@ -275,6 +358,32 @@ class RecyclingPOSApp(tk.Tk):
             )
         messagebox.showerror("Access denied", reason)
         return False
+
+    def require_admin_action(self, permission: str, action_label: str) -> bool:
+        if not self.require_permission(permission, action_label):
+            return False
+        return self.require_operator_pin_for_admin_action(action_label)
+
+    def require_operator_pin_for_admin_action(self, action_label: str) -> bool:
+        if not get_bool_setting(self.conn, REQUIRE_OPERATOR_PIN_ADMIN_KEY):
+            return True
+        operator = self.current_operator()
+        if operator is None:
+            messagebox.showerror("Operator required", "Select an active operator.")
+            return False
+        if not operator.pin_set:
+            messagebox.showerror(
+                "Operator PIN required",
+                "Operator PIN enforcement is enabled for admin actions, but this operator has no PIN.",
+            )
+            return False
+        if self.operator_is_verified(operator):
+            return True
+        messagebox.showinfo(
+            "Operator verification required",
+            f"Verify {format_operator_label(operator)} before you {action_label.lower()}.",
+        )
+        return self.verify_selected_operator()
 
     def add_line_item(self) -> None:
         material = self.material_by_label.get(self.material_var.get())
@@ -334,12 +443,26 @@ class RecyclingPOSApp(tk.Tk):
         if operator is None:
             messagebox.showerror("Operator required", "Select an active operator.")
             return
+        if get_bool_setting(self.conn, REQUIRE_OPERATOR_PIN_TRANSACTIONS_KEY):
+            if not operator.pin_set:
+                messagebox.showerror(
+                    "Operator PIN required",
+                    "Operator PIN enforcement is enabled, but this operator has no PIN.",
+                )
+                return
+            if not self.operator_is_verified(operator):
+                messagebox.showerror(
+                    "Operator verification required",
+                    "Verify the selected operator before saving this transaction.",
+                )
+                return
         try:
             tx_id = create_transaction(
                 self.conn,
                 TransactionInput(
                     line_items=self.pending_items,
                     operator_id=operator.id,
+                    operator_verified=self.operator_is_verified(operator),
                     payout_method=self.payout_var.get(),
                     notes=self.notes_var.get(),
                 ),
@@ -404,7 +527,7 @@ class RecyclingPOSApp(tk.Tk):
                 messagebox.showerror("PIN setup failed", str(exc))
                 return False
             messagebox.showinfo("PIN created", "Manager PIN created.")
-            return True
+            return self.require_operator_pin_for_admin_action("open Admin Settings")
 
         pin = simpledialog.askstring(
             "Manager PIN",
@@ -417,7 +540,7 @@ class RecyclingPOSApp(tk.Tk):
         if not verify_manager_pin(self.conn, pin):
             messagebox.showerror("Access denied", "Incorrect manager PIN.")
             return False
-        return True
+        return self.require_operator_pin_for_admin_action("open Admin Settings")
 
 
 class AdminSettingsWindow(tk.Toplevel):
@@ -605,7 +728,7 @@ class AdminSettingsWindow(tk.Toplevel):
     def _build_operator_tab(self) -> None:
         self.operator_tree = ttk.Treeview(
             self.operator_tab,
-            columns=("id", "name", "initials", "role", "active", "notes"),
+            columns=("id", "name", "initials", "role", "active", "pin", "notes"),
             show="headings",
             height=10,
         )
@@ -615,7 +738,8 @@ class AdminSettingsWindow(tk.Toplevel):
             ("initials", "Initials", 80),
             ("role", "Role", 90),
             ("active", "Active", 70),
-            ("notes", "Notes", 350),
+            ("pin", "PIN Set", 70),
+            ("notes", "Notes", 280),
         )
         for col, label, width in headings:
             self.operator_tree.heading(col, text=label)
@@ -663,6 +787,12 @@ class AdminSettingsWindow(tk.Toplevel):
             side="left", padx=(8, 0)
         )
         ttk.Button(buttons, text="Toggle Active", command=self.toggle_operator_active).pack(
+            side="left", padx=(8, 0)
+        )
+        ttk.Button(buttons, text="Set/Reset PIN", command=self.set_selected_operator_pin).pack(
+            side="left", padx=(8, 0)
+        )
+        ttk.Button(buttons, text="Clear PIN", command=self.clear_selected_operator_pin).pack(
             side="left", padx=(8, 0)
         )
 
@@ -737,6 +867,35 @@ class AdminSettingsWindow(tk.Toplevel):
             self.settings_tab,
             text="PIN protection is local-only access control for this workstation.",
         ).pack(anchor="w", pady=(18, 0))
+
+        operator_pin_frame = ttk.Frame(self.settings_tab)
+        operator_pin_frame.pack(fill="x", pady=(22, 0))
+        ttk.Label(
+            operator_pin_frame,
+            text="Operator PIN Verification",
+            style="Header.TLabel",
+        ).grid(row=0, column=0, sticky="w", columnspan=2, pady=(0, 8))
+        self.require_operator_pin_transactions = tk.BooleanVar(
+            value=get_bool_setting(self.conn, REQUIRE_OPERATOR_PIN_TRANSACTIONS_KEY)
+        )
+        self.require_operator_pin_admin = tk.BooleanVar(
+            value=get_bool_setting(self.conn, REQUIRE_OPERATOR_PIN_ADMIN_KEY)
+        )
+        ttk.Checkbutton(
+            operator_pin_frame,
+            text="Require operator PIN verification for transactions",
+            variable=self.require_operator_pin_transactions,
+        ).grid(row=1, column=0, sticky="w", pady=(0, 4))
+        ttk.Checkbutton(
+            operator_pin_frame,
+            text="Require operator PIN verification for admin actions",
+            variable=self.require_operator_pin_admin,
+        ).grid(row=2, column=0, sticky="w", pady=(0, 4))
+        ttk.Button(
+            operator_pin_frame,
+            text="Save Operator PIN Settings",
+            command=self.save_operator_pin_settings,
+        ).grid(row=3, column=0, sticky="w", pady=(8, 0))
 
         backup_frame = ttk.Frame(self.settings_tab)
         backup_frame.pack(fill="x", pady=(22, 0))
@@ -818,6 +977,7 @@ class AdminSettingsWindow(tk.Toplevel):
                     operator.initials,
                     operator.role,
                     "yes" if operator.active else "no",
+                    "yes" if operator.pin_set else "no",
                     operator.notes,
                 ),
             )
@@ -849,7 +1009,7 @@ class AdminSettingsWindow(tk.Toplevel):
         self.operator_notes.set("")
 
     def save_operator(self) -> None:
-        if not self.app.require_permission("manage_operators", "manage operators"):
+        if not self.app.require_admin_action("manage_operators", "manage operators"):
             return
         audit_operator = self.app.current_operator_audit_label()
         try:
@@ -881,19 +1041,89 @@ class AdminSettingsWindow(tk.Toplevel):
         self.refresh_audit_log()
 
     def toggle_operator_active(self) -> None:
-        if not self.app.require_permission("manage_operators", "manage operators"):
+        if not self.app.require_admin_action("manage_operators", "manage operators"):
             return
         if self.selected_operator_id is None:
             messagebox.showerror("No operator selected", "Select an operator first.")
             return
-        set_operator_active(
-            self.conn,
-            self.selected_operator_id,
-            not self.operator_active.get(),
-            operator=self.app.current_operator_audit_label(),
-        )
+        try:
+            set_operator_active(
+                self.conn,
+                self.selected_operator_id,
+                not self.operator_active.get(),
+                operator=self.app.current_operator_audit_label(),
+            )
+        except ValueError as exc:
+            messagebox.showerror("Operator validation", str(exc))
+            return
         self.refresh_operators()
         self.refresh_audit_log()
+
+    def set_selected_operator_pin(self) -> None:
+        if not self.app.require_admin_action("manage_operators", "manage operators"):
+            return
+        if self.selected_operator_id is None:
+            messagebox.showerror("No operator selected", "Select an operator first.")
+            return
+        pin = simpledialog.askstring(
+            "Set Operator PIN",
+            "Enter the new operator PIN:",
+            show="*",
+            parent=self,
+        )
+        if pin is None:
+            return
+        confirm = simpledialog.askstring(
+            "Confirm Operator PIN",
+            "Confirm the new operator PIN:",
+            show="*",
+            parent=self,
+        )
+        if pin != confirm:
+            messagebox.showerror("PIN change failed", "Operator PIN entries did not match.")
+            return
+        try:
+            set_operator_pin(
+                self.conn,
+                self.selected_operator_id,
+                pin,
+                operator=self.app.current_operator_audit_label(),
+            )
+        except ValueError as exc:
+            messagebox.showerror("PIN change failed", str(exc))
+            return
+        self.refresh_operators()
+        self.refresh_audit_log()
+        self.app.update_operator_status()
+        messagebox.showinfo("PIN updated", "Operator PIN updated.")
+
+    def clear_selected_operator_pin(self) -> None:
+        if not self.app.require_admin_action("manage_operators", "manage operators"):
+            return
+        if self.selected_operator_id is None:
+            messagebox.showerror("No operator selected", "Select an operator first.")
+            return
+        confirmed = messagebox.askyesno(
+            "Clear operator PIN?",
+            "Clear this operator PIN? The operator will no longer be able to verify by PIN.",
+            icon="warning",
+        )
+        if not confirmed:
+            return
+        try:
+            clear_operator_pin(
+                self.conn,
+                self.selected_operator_id,
+                operator=self.app.current_operator_audit_label(),
+            )
+        except ValueError as exc:
+            messagebox.showerror("PIN clear failed", str(exc))
+            return
+        self.refresh_operators()
+        self.refresh_audit_log()
+        self.app.verified_operator_id = None
+        self.app.update_operator_status()
+        messagebox.showinfo("PIN cleared", "Operator PIN cleared.")
 
     def on_material_select(self, _event: tk.Event) -> None:
         selected = self.material_tree.selection()
@@ -927,7 +1157,7 @@ class AdminSettingsWindow(tk.Toplevel):
         self.material_notes.set("")
 
     def save_material(self) -> None:
-        if not self.app.require_permission("manage_materials", "manage materials"):
+        if not self.app.require_admin_action("manage_materials", "manage materials"):
             return
         try:
             sort_order = int(self.material_sort.get() or "0")
@@ -965,7 +1195,7 @@ class AdminSettingsWindow(tk.Toplevel):
         self.refresh_rates()
 
     def toggle_material_active(self) -> None:
-        if not self.app.require_permission("manage_materials", "manage materials"):
+        if not self.app.require_admin_action("manage_materials", "manage materials"):
             return
         if self.selected_material_id is None:
             messagebox.showerror("No material selected", "Select a material first.")
@@ -1006,7 +1236,7 @@ class AdminSettingsWindow(tk.Toplevel):
         self.rate_notes.set("")
 
     def save_new_rate(self) -> None:
-        if not self.app.require_permission("manage_rates", "manage rates"):
+        if not self.app.require_admin_action("manage_rates", "manage rates"):
             return
         material = self.material_rate_labels.get(self.rate_material.get())
         if material is None:
@@ -1032,7 +1262,7 @@ class AdminSettingsWindow(tk.Toplevel):
         self.refresh_audit_log()
 
     def save_rate_metadata(self) -> None:
-        if not self.app.require_permission("manage_rates", "manage rates"):
+        if not self.app.require_admin_action("manage_rates", "manage rates"):
             return
         if self.selected_rate_id is None:
             messagebox.showerror("No rate selected", "Select a rate first.")
@@ -1094,7 +1324,7 @@ class AdminSettingsWindow(tk.Toplevel):
         self.audit_detail.insert("1.0", detail)
 
     def save_manager_pin_change(self) -> None:
-        if not self.app.require_permission("change_manager_pin", "change the manager PIN"):
+        if not self.app.require_admin_action("change_manager_pin", "change the manager PIN"):
             return
         if self.new_pin.get() != self.confirm_pin.get():
             messagebox.showerror("PIN change failed", "New PIN entries did not match.")
@@ -1115,8 +1345,35 @@ class AdminSettingsWindow(tk.Toplevel):
         self.refresh_audit_log()
         messagebox.showinfo("PIN changed", "Manager PIN changed.")
 
+    def save_operator_pin_settings(self) -> None:
+        if not self.app.require_admin_action(
+            "manage_operator_pin_settings", "manage operator PIN settings"
+        ):
+            return
+        operator = self.app.current_operator()
+        if self.require_operator_pin_admin.get() and operator is not None and not operator.pin_set:
+            messagebox.showerror(
+                "Operator PIN required",
+                "Set a PIN for the selected manager/admin before requiring PINs for admin actions.",
+            )
+            return
+        set_bool_setting(
+            self.conn,
+            REQUIRE_OPERATOR_PIN_TRANSACTIONS_KEY,
+            self.require_operator_pin_transactions.get(),
+            operator=self.app.current_operator_audit_label(),
+        )
+        set_bool_setting(
+            self.conn,
+            REQUIRE_OPERATOR_PIN_ADMIN_KEY,
+            self.require_operator_pin_admin.get(),
+            operator=self.app.current_operator_audit_label(),
+        )
+        self.refresh_audit_log()
+        messagebox.showinfo("Settings saved", "Operator PIN settings saved.")
+
     def export_audit_log(self) -> None:
-        if not self.app.require_permission("export_audit_log", "export the audit log"):
+        if not self.app.require_admin_action("export_audit_log", "export the audit log"):
             return
         entity_type = self.audit_filter.get()
         if entity_type == "all":
@@ -1144,7 +1401,7 @@ class AdminSettingsWindow(tk.Toplevel):
         messagebox.showinfo("Audit export complete", f"Exported {path}")
 
     def create_backup(self) -> None:
-        if not self.app.require_permission("create_backup", "create a database backup"):
+        if not self.app.require_admin_action("create_backup", "create a database backup"):
             return
         db_path = get_connection_db_path(self.conn)
         initial_dir = db_path.parent if db_path is not None else Path("data")
@@ -1171,7 +1428,7 @@ class AdminSettingsWindow(tk.Toplevel):
         messagebox.showinfo("Backup complete", f"Backup created:\n{path}")
 
     def restore_from_backup(self) -> None:
-        if not self.app.require_permission("restore_backup", "restore the database"):
+        if not self.app.require_admin_action("restore_backup", "restore the database"):
             return
         restore_path = filedialog.askopenfilename(
             parent=self,

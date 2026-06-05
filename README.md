@@ -16,6 +16,7 @@ The project is designed around local-first operation on an older Windows 11 Inte
 - Operator records and active operator selection for transactions.
 - Operator snapshots on transactions, receipts, reports, and audit entries.
 - Lightweight role-based admin permissions using operator roles and the manager PIN gate.
+- Optional individual operator PIN verification for stronger local identity tracking.
 - CRV and non-CRV line items tracked separately.
 - Count, weight, and manual payout line items.
 - Transaction save flow with receipt snapshot text stored at transaction time.
@@ -27,6 +28,7 @@ The project is designed around local-first operation on an older Windows 11 Inte
 - Focused tests for manager PIN hashing/validation and admin audit logging.
 - Focused tests for audit CSV export and local database backup/restore behavior.
 - Focused tests for operator identity, snapshots, reports, and audit attribution.
+- Focused tests for optional operator PIN hashing, enforcement, audit entries, and migrations.
 
 ## Quickstart
 
@@ -48,9 +50,9 @@ Open the app and use `Admin Settings`.
 
 The first time Admin Settings is opened, the app prompts for a manager PIN. The PIN is stored locally as a salted PBKDF2-SHA256 hash, not plain text. Later Admin Settings access requires that PIN. The PIN can be changed from the Settings tab after entering the current PIN.
 
-On first app launch, if no active operator exists, the app prompts to create one. Operators are not password accounts yet. They identify who performed transactions and admin changes. The manager PIN remains the gate for Admin Settings.
+On first app launch, if no active operator exists, the app prompts to create one. The first operator can optionally receive an individual PIN. Operators identify who performed transactions and admin changes. The manager PIN remains the main gate for Admin Settings.
 
-Use the Operators tab in Admin Settings to add/edit operators, set initials, assign a lightweight role (`operator`, `manager`, or `admin`), and deactivate/reactivate operators. Operators are deactivated instead of deleted so historical transactions and audit records remain understandable.
+Use the Operators tab in Admin Settings to add/edit operators, set initials, assign a lightweight role (`operator`, `manager`, or `admin`), set/reset/clear an optional operator PIN, and deactivate/reactivate operators. Operators are deactivated instead of deleted so historical transactions and audit records remain understandable.
 
 Role behavior in the current MVP:
 
@@ -59,6 +61,13 @@ Role behavior in the current MVP:
 - `admin`: currently has the same permissions as `manager`; it is reserved for cleaner future separation.
 
 The app prevents deactivating or demoting the last active manager/admin operator. That protects the business from locking itself out of Admin Settings.
+
+Operator selection is still not the same as a full login. If an operator has a PIN, the main screen can verify that PIN and show `Verified`. If no PIN exists, the screen shows `PIN not set`. In `Admin Settings` > `Settings`, managers/admins can enable:
+
+- Require operator PIN verification for transactions.
+- Require operator PIN verification for admin actions.
+
+Both settings default to off for compatibility. Enabling them improves accountability, but it remains local-only identity verification. PINs are stored as salted PBKDF2-SHA256 hashes, never plain text, and PIN values are not written to the audit log.
 
 Materials can be added, edited, deactivated, or reactivated. Deactivated materials are hidden from new transaction input but remain in historical transactions and reports.
 
@@ -69,6 +78,8 @@ The app warns when an active rate period overlaps another active period for the 
 Startup seed data creates missing defaults only. It should not reactivate or overwrite materials that were later changed in Admin Settings.
 
 The Audit Log tab shows newest entries first and records operator, material, rate, and settings changes. It also records manager PIN creation/change events, audit CSV exports, backups, and restore attempts/completions/failures. Audit entries use the selected operator when available and keep before/after JSON snapshots where available.
+
+Operator PIN set/change/clear events and operator PIN enforcement setting changes are audit logged without PIN values or hashes.
 
 Use `Export CSV` in the Audit Log tab to save the currently filtered audit view. The default filename is `audit_log_YYYY-MM-DD_HHMMSS.csv`.
 
@@ -85,6 +96,7 @@ Restore is intentionally cautious. The manager chooses a backup file, sees a war
 - No cloud service is required for the MVP.
 - Receipts are snapshotted so later rate changes do not alter old transaction records.
 - Operator display name and initials are snapshotted on each transaction.
+- Transactions store whether the selected operator was PIN-verified at save time.
 - Old materials and rates are retained for audit/history instead of hard-deleted.
 - Inactive operators are hidden from new transactions but retained for history.
 - Admin settings are protected by local PIN access control.
@@ -99,12 +111,12 @@ This repository is not a compliance-certified system. California CRV rules, cert
 The initial CRV assumptions are planning placeholders only.
 The admin screen makes CRV values configurable, but it does not replace compliance review.
 
-The manager PIN is the main local security gate for admin access. Operator role selection controls which actions are available, but it is not true authentication and does not prevent impersonation by itself. This does not replace OS account security, backups, disk encryption, employee-specific authentication, or production audit controls. Restoring an old backup can roll back operational records, so restore should be manager-only and documented in operating procedures.
+The manager PIN is the main local security gate for admin access. Operator role selection controls which actions are available. Optional individual operator PIN verification improves accountability but still does not replace OS account security, backups, disk encryption, production employee authentication, or production audit controls. Restoring an old backup can roll back operational records, so restore should be manager-only and documented in operating procedures.
 
 ## Intentionally Not Built Yet
 
-- Employee password authentication.
-- Operator passwords or individual login enforcement.
+- Employee password authentication or online accounts.
+- Full employee login sessions beyond optional local operator PIN verification.
 - Scale integration.
 - Cash drawer integration.
 - Thermal receipt printer integration.

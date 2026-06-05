@@ -19,6 +19,8 @@ from app.receipt import build_receipt_text
 DEFAULT_DB_PATH = Path("data/recycling_pos.sqlite3")
 PIN_HASH_ITERATIONS = 260_000
 MANAGER_PIN_SETTING_KEY = "manager_pin_hash"
+REQUIRE_OPERATOR_PIN_TRANSACTIONS_KEY = "require_operator_pin_for_transactions"
+REQUIRE_OPERATOR_PIN_ADMIN_KEY = "require_operator_pin_for_admin_actions"
 
 
 def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -71,6 +73,7 @@ def init_db(conn: sqlite3.Connection) -> None:
             operator_initials TEXT NOT NULL,
             operator_display_name_snapshot TEXT NOT NULL DEFAULT '',
             operator_initials_snapshot TEXT NOT NULL DEFAULT '',
+            operator_verified INTEGER NOT NULL DEFAULT 0,
             payout_method TEXT NOT NULL,
             notes TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'active'
@@ -127,6 +130,8 @@ def init_db(conn: sqlite3.Connection) -> None:
             role TEXT NOT NULL DEFAULT 'operator'
                 CHECK (role IN ('operator', 'manager', 'admin')),
             active INTEGER NOT NULL DEFAULT 1,
+            pin_hash TEXT,
+            pin_updated_at TEXT,
             notes TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -174,6 +179,9 @@ def init_db(conn: sqlite3.Connection) -> None:
         "operator_initials_snapshot",
         "TEXT NOT NULL DEFAULT ''",
     )
+    _ensure_column(conn, "transactions", "operator_verified", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "operators", "pin_hash", "TEXT")
+    _ensure_column(conn, "operators", "pin_updated_at", "TEXT")
     conn.execute(
         """
         UPDATE transactions
@@ -234,6 +242,10 @@ def verify_manager_pin(conn: sqlite3.Connection, pin: str) -> bool:
     stored_hash = get_setting(conn, MANAGER_PIN_SETTING_KEY)
     if stored_hash is None:
         return False
+    return _verify_pin_hash(stored_hash, pin)
+
+
+def _verify_pin_hash(stored_hash: str, pin: str) -> bool:
     try:
         algorithm, iterations, salt_hex, digest_hex = stored_hash.split("$", 3)
         if algorithm != "pbkdf2_sha256":
@@ -268,6 +280,42 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
+def get_bool_setting(conn: sqlite3.Connection, key: str, default: bool = False) -> bool:
+    value = get_setting(conn, key)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def set_bool_setting(
+    conn: sqlite3.Connection,
+    key: str,
+    value: bool,
+    *,
+    operator: str = "manager",
+    audit: bool = True,
+    notes: str = "",
+) -> None:
+    if key not in {REQUIRE_OPERATOR_PIN_TRANSACTIONS_KEY, REQUIRE_OPERATOR_PIN_ADMIN_KEY}:
+        raise ValueError(f"Unsupported boolean setting: {key}")
+    before_raw = get_setting(conn, key)
+    before = None if before_raw is None else {"value": before_raw == "true"}
+    after = {"value": bool(value)}
+    with conn:
+        set_setting(conn, key, "true" if value else "false")
+        if audit and before != after:
+            add_audit_entry(
+                conn,
+                action_type="operator_pin_enforcement_changed",
+                entity_type="settings",
+                entity_id=key,
+                before_value=before,
+                after_value=after,
+                operator=operator,
+                notes=notes or "Operator PIN enforcement setting changed.",
+            )
+
+
 def _hash_pin(pin: str) -> str:
     salt = os.urandom(16)
     digest = hashlib.pbkdf2_hmac(
@@ -276,9 +324,9 @@ def _hash_pin(pin: str) -> str:
     return f"pbkdf2_sha256${PIN_HASH_ITERATIONS}${salt.hex()}${digest.hex()}"
 
 
-def _validate_pin_input(pin: str) -> None:
+def _validate_pin_input(pin: str, *, label: str = "Manager PIN") -> None:
     if len(pin.strip()) < 4:
-        raise ValueError("Manager PIN must be at least 4 characters.")
+        raise ValueError(f"{label} must be at least 4 characters.")
 
 
 def add_audit_entry(
@@ -381,6 +429,8 @@ def operator_from_row(row: sqlite3.Row) -> Operator:
         initials=row["initials"],
         role=row["role"],
         active=bool(row["active"]),
+        pin_set=bool(row["pin_hash"]),
+        pin_updated_at=row["pin_updated_at"],
         notes=row["notes"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -416,6 +466,7 @@ def create_operator(
     initials: str,
     role: str = "operator",
     active: bool = True,
+    initial_pin: str | None = None,
     notes: str = "",
     audit: bool = True,
     operator: str = "manager",
@@ -427,19 +478,28 @@ def create_operator(
         raise ValueError("Operator display name is required.")
     if not normalized_initials:
         raise ValueError("Operator initials are required.")
+    pin_hash = None
+    pin_updated_at = None
+    if initial_pin is not None and initial_pin.strip():
+        _validate_pin_input(initial_pin, label="Operator PIN")
+        pin_hash = _hash_pin(initial_pin)
+        pin_updated_at = datetime.now().isoformat(timespec="seconds")
     with conn:
         cursor = conn.execute(
             """
             INSERT INTO operators (
-                display_name, initials, role, active, notes, created_at, updated_at
+                display_name, initials, role, active, pin_hash, pin_updated_at,
+                notes, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """,
             (
                 display_name.strip(),
                 normalized_initials,
                 role,
                 1 if active else 0,
+                pin_hash,
+                pin_updated_at,
                 notes.strip(),
             ),
         )
@@ -568,9 +628,138 @@ def format_operator_label(operator: Operator) -> str:
     return f"{operator.display_name} ({operator.initials})"
 
 
+def operator_pin_is_set(conn: sqlite3.Connection, operator_id: int) -> bool:
+    row = conn.execute(
+        "SELECT pin_hash FROM operators WHERE id = ?", (operator_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Unknown operator_id: {operator_id}")
+    return bool(row["pin_hash"])
+
+
+def set_operator_pin(
+    conn: sqlite3.Connection,
+    operator_id: int,
+    pin: str,
+    *,
+    operator: str = "manager",
+    audit: bool = True,
+) -> None:
+    _validate_pin_input(pin, label="Operator PIN")
+    before = _operator_snapshot(conn, operator_id)
+    if before is None:
+        raise ValueError(f"Unknown operator_id: {operator_id}")
+    action_type = "operator_pin_changed" if before["pin_set"] else "operator_pin_set"
+    updated_at = datetime.now().isoformat(timespec="seconds")
+    with conn:
+        result = conn.execute(
+            """
+            UPDATE operators
+            SET pin_hash = ?, pin_updated_at = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (_hash_pin(pin), updated_at, operator_id),
+        )
+        if result.rowcount and audit:
+            add_audit_entry(
+                conn,
+                action_type=action_type,
+                entity_type="operator",
+                entity_id=operator_id,
+                before_value=before,
+                after_value=_operator_snapshot(conn, operator_id),
+                operator=operator,
+                notes="Operator PIN set or changed.",
+            )
+    if result.rowcount == 0:
+        raise ValueError(f"Unknown operator_id: {operator_id}")
+
+
+def clear_operator_pin(
+    conn: sqlite3.Connection,
+    operator_id: int,
+    *,
+    operator: str = "manager",
+    audit: bool = True,
+) -> None:
+    before = _operator_snapshot(conn, operator_id)
+    if before is None:
+        raise ValueError(f"Unknown operator_id: {operator_id}")
+    with conn:
+        result = conn.execute(
+            """
+            UPDATE operators
+            SET pin_hash = NULL, pin_updated_at = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (operator_id,),
+        )
+        if result.rowcount and audit and before["pin_set"]:
+            add_audit_entry(
+                conn,
+                action_type="operator_pin_cleared",
+                entity_type="operator",
+                entity_id=operator_id,
+                before_value=before,
+                after_value=_operator_snapshot(conn, operator_id),
+                operator=operator,
+                notes="Operator PIN cleared.",
+            )
+    if result.rowcount == 0:
+        raise ValueError(f"Unknown operator_id: {operator_id}")
+
+
+def verify_operator_pin(
+    conn: sqlite3.Connection,
+    operator_id: int,
+    pin: str,
+    *,
+    operator: str = "manager",
+    audit: bool = False,
+) -> bool:
+    row = conn.execute(
+        "SELECT pin_hash, display_name, initials FROM operators WHERE id = ?", (operator_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Unknown operator_id: {operator_id}")
+    if not row["pin_hash"]:
+        return False
+    verified = _verify_pin_hash(row["pin_hash"], pin)
+    if audit:
+        with conn:
+            add_audit_entry(
+                conn,
+                action_type=(
+                    "operator_pin_verification_succeeded"
+                    if verified
+                    else "operator_pin_verification_failed"
+                ),
+                entity_type="operator",
+                entity_id=operator_id,
+                before_value=None,
+                after_value={"operator": f"{row['display_name']} ({row['initials']})"},
+                operator=operator,
+                notes="Operator PIN verification attempted.",
+            )
+    return verified
+
+
 def _operator_snapshot(conn: sqlite3.Connection, operator_id: int) -> dict[str, object] | None:
     row = conn.execute("SELECT * FROM operators WHERE id = ?", (operator_id,)).fetchone()
-    return _row_to_dict(row)
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "display_name": row["display_name"],
+        "initials": row["initials"],
+        "role": row["role"],
+        "active": bool(row["active"]),
+        "pin_set": bool(row["pin_hash"]),
+        "pin_updated_at": row["pin_updated_at"],
+        "notes": row["notes"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
 
 
 def _active_admin_operator_count(
@@ -1067,8 +1256,16 @@ def create_transaction(
     operator_record = get_operator(conn, payload.operator_id)
     if not operator_record.active:
         raise ValueError(f"Operator {operator_record.display_name} is inactive.")
+    if get_bool_setting(conn, REQUIRE_OPERATOR_PIN_TRANSACTIONS_KEY):
+        if not operator_record.pin_set:
+            raise ValueError(
+                "Operator PIN is required for transactions but this operator has no PIN."
+            )
+        if not payload.operator_verified:
+            raise ValueError("Operator PIN verification is required to save this transaction.")
     operator_initials_snapshot = operator_record.initials
     operator_name_snapshot = operator_record.display_name
+    operator_verified_snapshot = bool(payload.operator_verified and operator_record.pin_set)
     transaction_id = str(uuid4())
     line_rows: list[dict[str, object]] = []
     total_cents = 0
@@ -1078,10 +1275,10 @@ def create_transaction(
             """
             INSERT INTO transactions (
                 id, created_at, operator_id, operator_initials,
-                operator_display_name_snapshot, operator_initials_snapshot,
+                operator_display_name_snapshot, operator_initials_snapshot, operator_verified,
                 payout_method, notes, status, total_cents
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0)
             """,
             (
                 transaction_id,
@@ -1090,6 +1287,7 @@ def create_transaction(
                 operator_initials_snapshot,
                 operator_name_snapshot,
                 operator_initials_snapshot,
+                1 if operator_verified_snapshot else 0,
                 payload.payout_method.strip() or "cash",
                 payload.notes.strip(),
             ),
@@ -1148,6 +1346,7 @@ def create_transaction(
                 "created_at": created_at.isoformat(timespec="seconds"),
                 "operator_display_name": operator_name_snapshot,
                 "operator_initials": operator_initials_snapshot,
+                "operator_verified": operator_verified_snapshot,
                 "payout_method": payload.payout_method.strip() or "cash",
                 "notes": payload.notes.strip(),
                 "total_cents": total_cents,

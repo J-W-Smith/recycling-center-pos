@@ -43,6 +43,8 @@ class Operator:
     initials: str
     role: OperatorRole
     active: bool = True
+    pin_set: bool = False
+    pin_updated_at: str | None = None
     notes: str = ""
     created_at: str = ""
     updated_at: str = ""
@@ -61,5 +63,6 @@ class TransactionInput:
     line_items: list[LineItemInput]
     operator_id: int | None = None
     operator_initials: str = ""
+    operator_verified: bool = False
     payout_method: str = "cash"
     notes: str = ""

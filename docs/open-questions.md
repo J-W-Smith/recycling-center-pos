@@ -10,6 +10,10 @@
 - Should the manager PIN be shared by role or should each employee have a separate login?
 - What operator roles are actually needed?
 - Should operators need individual PINs or passwords later?
+- Should individual operator PINs be required for every transaction?
+- Should individual manager/admin operator PINs be required for every admin action?
+- What is the minimum acceptable operator PIN length and rotation policy?
+- Who is allowed to reset or clear another operator's PIN?
 - Should manager and admin become meaningfully different roles?
 - Which actions should require admin rather than manager later?
 - Should managers be able to save transactions, or only approve/administer?

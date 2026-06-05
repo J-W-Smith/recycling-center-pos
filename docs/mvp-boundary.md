@@ -15,8 +15,13 @@
 - Cautious local SQLite restore with validation, warning, PIN confirmation, and pre-restore backup.
 - First active operator setup prompt.
 - Active operator selector on the transaction screen.
+- Optional operator PIN setup on first-operator creation.
+- Main-screen operator PIN verification status and verify button.
 - Operator management tab in Admin Settings.
+- Operator PIN set/reset/clear controls in Admin Settings.
+- Admin settings for optional operator PIN enforcement on transactions and admin actions.
 - Operator snapshots on transactions and receipts.
+- Operator PIN verification snapshot on transactions.
 - Daily report operator summary.
 - Centralized role/permission helpers for Admin Settings actions.
 - Admin Settings access denied for plain operators.
@@ -31,6 +36,7 @@
 - Tests for audit CSV export, database backup copies, restore rejection, pre-restore backup creation, and valid restore replacement.
 - Tests for operator creation, migration, inactive filtering, transaction requirements, receipt snapshots, report summaries, admin audit attribution, and historical preservation.
 - Tests for operator/manager/admin permissions, admin denial audit entries, backup/restore/audit-export permissions, and last manager/admin safeguards.
+- Tests for optional operator PIN hashing, validation, reset/clear audit logs, enforcement settings, transaction enforcement, and migrations.
 
 ## Deferred
 
@@ -38,10 +44,10 @@
 - Certified scale integration.
 - Thermal printer support.
 - Cash drawer support.
-- Employee login/permission model.
+- Full employee login/session model.
 - Customer profile or ID capture.
 - Business-specific payout approval rules.
-- Operator passwords or full employee authentication.
+- Operator passwords or full employee authentication beyond optional local PIN verification.
 - Fine-grained separation between manager and admin roles.
 - Audit log signing, retention policy automation, or tamper-evidence.
 - PDF exports.
@@ -59,4 +65,5 @@
 - Do not present local PIN protection as full security or compliance certification.
 - Do not silently restore a database without warning, PIN confirmation, and a pre-restore backup.
 - Do not treat operator selection as secure authentication.
+- Do not treat optional operator PIN verification as enterprise authentication.
 - Do not allow deactivating or demoting the last active manager/admin.
