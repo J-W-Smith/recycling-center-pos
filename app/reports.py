@@ -126,13 +126,17 @@ def generate_daily_report(conn: sqlite3.Connection, report_date: date | str) -> 
             }
         )
     operator_list.sort(key=lambda g: g["operator_label"])
+    voided_list = list(voided.values())
+    voided_total_cents = sum(int(item["line_total_cents"]) for item in voided_list)
 
     return {
         "date": day,
         "groups": group_list,
         "operator_summaries": operator_list,
         "grand_total_cents": grand_total_cents,
-        "voided_transactions": list(voided.values()),
+        "voided_transactions": voided_list,
+        "void_count": len(voided_list),
+        "voided_total_cents": voided_total_cents,
     }
 
 
@@ -195,6 +199,8 @@ def export_daily_report_csv(report: dict[str, Any], output_path: str | Path) -> 
             )
         writer.writerow([])
         writer.writerow(["Voided/Corrected Transactions"])
+        writer.writerow(["Void Count", report["void_count"]])
+        writer.writerow(["Voided Amount", format_cents(report["voided_total_cents"])])
         writer.writerow(["Transaction ID", "Operator", "Reason", "Voided Line Total"])
         for voided in report["voided_transactions"]:
             writer.writerow(
@@ -270,6 +276,8 @@ def render_daily_report_html(report: dict[str, Any]) -> str:
     <tbody>{operator_rows}</tbody>
   </table>
   <h2>Voided/Corrected Transactions</h2>
+  <p>Void Count: {report['void_count']}<br>
+  Voided Amount: {format_cents(report['voided_total_cents'])}</p>
   <table>
     <thead>
       <tr><th>Transaction ID</th><th>Operator</th><th>Reason</th><th>Voided Line Total</th></tr>

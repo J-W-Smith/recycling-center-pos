@@ -26,6 +26,7 @@ from app.db import (
     list_audit_entries,
     list_materials,
     list_operators,
+    list_transactions,
     list_rates,
     set_bool_setting,
     set_material_active,
@@ -36,6 +37,7 @@ from app.db import (
     update_rate_metadata,
     verify_manager_pin,
     verify_operator_pin,
+    void_transaction,
 )
 from app.models import LineItemInput, MaterialType, Operator, TransactionInput
 from app.maintenance import (
@@ -49,6 +51,7 @@ from app.maintenance import (
 )
 from app.permissions import has_permission
 from app.pricing import dollars_to_cents, decimal_from_user, format_cents
+from app.receipt import mark_voided_receipt_text
 from app.reports import export_daily_report_csv, generate_daily_report, render_daily_report_html
 
 
@@ -184,6 +187,11 @@ class RecyclingPOSApp(tk.Tk):
         ttk.Button(actions, text="Export Today CSV", command=self.export_daily_csv).pack(
             side="left", padx=(0, 8)
         )
+        ttk.Button(
+            actions,
+            text="Transaction History",
+            command=self.open_transaction_history,
+        ).pack(side="left", padx=(0, 8))
         ttk.Button(actions, text="Admin Settings", command=self.open_admin_settings).pack(
             side="left", padx=(0, 8)
         )
@@ -491,6 +499,13 @@ class RecyclingPOSApp(tk.Tk):
         )
         messagebox.showinfo("CSV exported", f"Exported {path}")
 
+    def open_transaction_history(self) -> None:
+        if not self.require_permission(
+            "view_voided_transactions", "view transaction history"
+        ):
+            return
+        TransactionHistoryWindow(self, self.conn)
+
     def open_admin_settings(self) -> None:
         if not self._manager_pin_allows_admin():
             return
@@ -541,6 +556,167 @@ class RecyclingPOSApp(tk.Tk):
             messagebox.showerror("Access denied", "Incorrect manager PIN.")
             return False
         return self.require_operator_pin_for_admin_action("open Admin Settings")
+
+    def prompt_manager_pin(self, action_label: str) -> str | None:
+        pin = simpledialog.askstring(
+            "Confirm Manager PIN",
+            f"Enter manager PIN to {action_label}:",
+            show="*",
+            parent=self,
+        )
+        return pin
+
+
+class TransactionHistoryWindow(tk.Toplevel):
+    def __init__(self, app: RecyclingPOSApp, conn: sqlite3.Connection) -> None:
+        super().__init__(app)
+        self.app = app
+        self.conn = conn
+        self.title("Transaction History")
+        self.geometry("960x620")
+        self.configure(background="#c0c0c0")
+        self.selected_transaction_id: str | None = None
+        self._build()
+        self.refresh_transactions()
+
+    def _build(self) -> None:
+        root = ttk.Frame(self, padding=8)
+        root.pack(fill="both", expand=True)
+        self.tree = ttk.Treeview(
+            root,
+            columns=("id", "created", "status", "operator", "total"),
+            show="headings",
+            height=10,
+        )
+        headings = (
+            ("id", "Transaction ID", 260),
+            ("created", "Created", 150),
+            ("status", "Status", 80),
+            ("operator", "Operator", 170),
+            ("total", "Total", 90),
+        )
+        for col, label, width in headings:
+            self.tree.heading(col, text=label)
+            self.tree.column(col, width=width, anchor="w")
+        self.tree.pack(fill="x", pady=(0, 8))
+        self.tree.bind("<<TreeviewSelect>>", self.on_transaction_select)
+
+        buttons = ttk.Frame(root)
+        buttons.pack(fill="x", pady=(0, 8))
+        ttk.Button(buttons, text="Refresh", command=self.refresh_transactions).pack(
+            side="left", padx=(0, 8)
+        )
+        if self.app.current_operator() is not None:
+            if self.app.require_permission("void_transaction", "void transactions"):
+                ttk.Button(
+                    buttons,
+                    text="Void Selected",
+                    command=self.void_selected_transaction,
+                ).pack(side="left", padx=(0, 8))
+            if self.app.require_permission("correct_transaction", "correct transactions"):
+                ttk.Button(
+                    buttons,
+                    text="Correction Workflow",
+                    command=self.show_correction_placeholder,
+                ).pack(side="left", padx=(0, 8))
+
+        self.detail = tk.Text(root, height=24, font=("Courier New", 9), wrap="word")
+        self.detail.pack(fill="both", expand=True)
+
+    def refresh_transactions(self) -> None:
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for row in list_transactions(self.conn):
+            operator = _operator_label_from_transaction_row(row)
+            self.tree.insert(
+                "",
+                "end",
+                iid=row["id"],
+                values=(
+                    row["id"],
+                    row["created_at"],
+                    row["status"],
+                    operator,
+                    format_cents(int(row["total_cents"])),
+                ),
+            )
+
+    def on_transaction_select(self, _event: tk.Event) -> None:
+        selected = self.tree.selection()
+        if not selected:
+            return
+        self.selected_transaction_id = selected[0]
+        row = fetch_transaction(self.conn, self.selected_transaction_id)
+        receipt_text = row["receipt_snapshot_text"]
+        if row["status"] == "voided":
+            receipt_text = mark_voided_receipt_text(
+                receipt_text,
+                voided_at=row["voided_at"] or "",
+                reason=row["void_reason"] or "",
+            )
+        self.detail.delete("1.0", "end")
+        self.detail.insert("1.0", receipt_text)
+
+    def void_selected_transaction(self) -> None:
+        if self.selected_transaction_id is None:
+            messagebox.showerror("No transaction selected", "Select a transaction first.")
+            return
+        if not self.app.require_admin_action("void_transaction", "void transactions"):
+            return
+        row = fetch_transaction(self.conn, self.selected_transaction_id)
+        if row["status"] == "voided":
+            messagebox.showerror("Already voided", "This transaction is already voided.")
+            return
+        reason = simpledialog.askstring(
+            "Void Transaction",
+            "Enter the required void reason:",
+            parent=self,
+        )
+        if reason is None:
+            return
+        if not reason.strip():
+            messagebox.showerror("Reason required", "A void reason is required.")
+            return
+        pin = self.app.prompt_manager_pin("void this transaction")
+        if pin is None:
+            return
+        operator = self.app.current_operator()
+        if operator is None:
+            messagebox.showerror("Operator required", "Select an active operator.")
+            return
+        try:
+            void_transaction(
+                self.conn,
+                self.selected_transaction_id,
+                reason,
+                acting_operator_id=operator.id,
+                manager_pin=pin,
+                operator_verified=self.app.operator_is_verified(operator),
+                operator=self.app.current_operator_audit_label(),
+            )
+        except (PermissionError, ValueError) as exc:
+            messagebox.showerror("Void failed", str(exc))
+            return
+        self.refresh_transactions()
+        self.on_transaction_select(tk.Event())
+        messagebox.showinfo("Transaction voided", "Transaction voided and audit logged.")
+
+    def show_correction_placeholder(self) -> None:
+        if not self.app.require_admin_action("correct_transaction", "correct transactions"):
+            return
+        messagebox.showinfo(
+            "Correction workflow pending",
+            "Full non-destructive correction transactions are not implemented yet. "
+            "For this MVP, void the incorrect transaction with a reason and enter a new transaction.",
+        )
+
+
+def _operator_label_from_transaction_row(row: sqlite3.Row) -> str:
+    name = str(row["operator_display_name_snapshot"] or "").strip()
+    initials = str(row["operator_initials_snapshot"] or row["operator_initials"] or "").strip()
+    if name and initials:
+        return f"{name} ({initials})"
+    return initials or name or "Unknown"
 
 
 class AdminSettingsWindow(tk.Toplevel):

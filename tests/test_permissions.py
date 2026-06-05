@@ -26,6 +26,10 @@ ADMIN_PERMISSIONS = {
     "restore_backup",
     "change_manager_pin",
     "manage_operator_pin_settings",
+    "void_transaction",
+    "correct_transaction",
+    "view_voided_transactions",
+    "approve_transaction_adjustment",
 }
 
 

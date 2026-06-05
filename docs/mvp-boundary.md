@@ -22,7 +22,11 @@
 - Admin settings for optional operator PIN enforcement on transactions and admin actions.
 - Operator snapshots on transactions and receipts.
 - Operator PIN verification snapshot on transactions.
+- Transaction History window for reviewing stored transactions and receipt snapshots.
+- Controlled manager/admin transaction void workflow with manager PIN approval.
+- Voided receipt display marker without rewriting the original receipt snapshot.
 - Daily report operator summary.
+- Daily report void count, voided amount, and separate voided transaction section.
 - Centralized role/permission helpers for Admin Settings actions.
 - Admin Settings access denied for plain operators.
 - Last active manager/admin deactivation/demotion safeguards.
@@ -37,6 +41,7 @@
 - Tests for operator creation, migration, inactive filtering, transaction requirements, receipt snapshots, report summaries, admin audit attribution, and historical preservation.
 - Tests for operator/manager/admin permissions, admin denial audit entries, backup/restore/audit-export permissions, and last manager/admin safeguards.
 - Tests for optional operator PIN hashing, validation, reset/clear audit logs, enforcement settings, transaction enforcement, and migrations.
+- Tests for controlled transaction void permissions, reason requirements, audit entries, report totals, receipt display, and migrations.
 
 ## Deferred
 
@@ -47,6 +52,7 @@
 - Full employee login/session model.
 - Customer profile or ID capture.
 - Business-specific payout approval rules.
+- Full linked correction/adjustment transaction workflow.
 - Operator passwords or full employee authentication beyond optional local PIN verification.
 - Fine-grained separation between manager and admin roles.
 - Audit log signing, retention policy automation, or tamper-evidence.
@@ -61,6 +67,7 @@
 - Do not hardcode production rates into business logic.
 - Do not assume the seed CRV settings are production-correct.
 - Do not delete or rewrite transaction records as the normal correction path.
+- Do not void transactions without manager/admin role, manager PIN approval, and a reason.
 - Do not hard-delete materials or rates as the default admin action.
 - Do not present local PIN protection as full security or compliance certification.
 - Do not silently restore a database without warning, PIN confirmation, and a pre-restore backup.

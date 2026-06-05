@@ -17,6 +17,10 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "restore_backup",
         "change_manager_pin",
         "manage_operator_pin_settings",
+        "void_transaction",
+        "correct_transaction",
+        "view_voided_transactions",
+        "approve_transaction_adjustment",
     },
     "admin": {
         "access_admin_settings",
@@ -28,6 +32,10 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "restore_backup",
         "change_manager_pin",
         "manage_operator_pin_settings",
+        "void_transaction",
+        "correct_transaction",
+        "view_voided_transactions",
+        "approve_transaction_adjustment",
     },
 }
 

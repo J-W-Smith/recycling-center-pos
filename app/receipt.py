@@ -78,3 +78,16 @@ def receipt_text_to_html(receipt_text: str) -> str:
 </body>
 </html>
 """
+
+
+def mark_voided_receipt_text(
+    receipt_text: str, *, voided_at: str = "", reason: str = ""
+) -> str:
+    lines = [
+        "VOIDED TRANSACTION",
+        f"Void Date/Time: {voided_at or 'unknown'}",
+        f"Void Reason: {reason or 'not recorded'}",
+        "-" * 42,
+        receipt_text,
+    ]
+    return "\n".join(lines)

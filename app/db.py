@@ -79,6 +79,9 @@ def init_db(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL DEFAULT 'active'
                 CHECK (status IN ('active', 'voided', 'corrected')),
             voided_at TEXT,
+            voided_by_operator_id INTEGER REFERENCES operators(id),
+            voided_by_operator_name_snapshot TEXT NOT NULL DEFAULT '',
+            voided_by_operator_initials_snapshot TEXT NOT NULL DEFAULT '',
             void_reason TEXT,
             correction_of_transaction_id TEXT REFERENCES transactions(id),
             total_cents INTEGER NOT NULL DEFAULT 0,
@@ -180,6 +183,24 @@ def init_db(conn: sqlite3.Connection) -> None:
         "TEXT NOT NULL DEFAULT ''",
     )
     _ensure_column(conn, "transactions", "operator_verified", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(
+        conn,
+        "transactions",
+        "voided_by_operator_id",
+        "INTEGER REFERENCES operators(id)",
+    )
+    _ensure_column(
+        conn,
+        "transactions",
+        "voided_by_operator_name_snapshot",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    _ensure_column(
+        conn,
+        "transactions",
+        "voided_by_operator_initials_snapshot",
+        "TEXT NOT NULL DEFAULT ''",
+    )
     _ensure_column(conn, "operators", "pin_hash", "TEXT")
     _ensure_column(conn, "operators", "pin_updated_at", "TEXT")
     conn.execute(
@@ -1372,23 +1393,140 @@ def create_transaction(
     return transaction_id
 
 
-def void_transaction(conn: sqlite3.Connection, transaction_id: str, reason: str) -> None:
-    with conn:
-        row = conn.execute(
-            "SELECT status FROM transactions WHERE id = ?", (transaction_id,)
-        ).fetchone()
-        if row is None:
+def void_transaction(
+    conn: sqlite3.Connection,
+    transaction_id: str,
+    reason: str,
+    *,
+    acting_operator_id: int,
+    manager_pin: str,
+    operator_verified: bool = False,
+    operator: str | None = None,
+) -> None:
+    from app.permissions import has_permission
+
+    acting_operator = get_operator(conn, acting_operator_id)
+    actor_label = operator or format_operator_label(acting_operator)
+    clean_reason = reason.strip()
+    _audit_transaction_void_attempt(conn, transaction_id, clean_reason, actor_label)
+    try:
+        if not clean_reason:
+            raise ValueError("A void reason is required.")
+        if not has_permission(acting_operator, "void_transaction"):
+            raise PermissionError("Selected operator cannot void transactions.")
+        if not verify_manager_pin(conn, manager_pin):
+            raise PermissionError("Manager PIN approval is required to void a transaction.")
+        if get_bool_setting(conn, REQUIRE_OPERATOR_PIN_ADMIN_KEY):
+            if not acting_operator.pin_set:
+                raise PermissionError(
+                    "Operator PIN enforcement is enabled, but this operator has no PIN."
+                )
+            if not operator_verified:
+                raise PermissionError(
+                    "Operator PIN verification is required to void a transaction."
+                )
+        before = _transaction_snapshot(conn, transaction_id)
+        if before is None:
             raise ValueError(f"Unknown transaction: {transaction_id}")
-        if row["status"] == "voided":
-            return
+        if before["status"] == "voided":
+            raise ValueError("Transaction is already voided.")
+        if before["status"] != "active":
+            raise ValueError("Only active completed transactions can be voided.")
+
+        voided_at = datetime.now().isoformat(timespec="seconds")
+        with conn:
+            conn.execute(
+                """
+                UPDATE transactions
+                SET status = 'voided',
+                    voided_at = ?,
+                    voided_by_operator_id = ?,
+                    voided_by_operator_name_snapshot = ?,
+                    voided_by_operator_initials_snapshot = ?,
+                    void_reason = ?
+                WHERE id = ?
+                """,
+                (
+                    voided_at,
+                    acting_operator.id,
+                    acting_operator.display_name,
+                    acting_operator.initials,
+                    clean_reason,
+                    transaction_id,
+                ),
+            )
+            add_audit_entry(
+                conn,
+                action_type="transaction_void_completed",
+                entity_type="transaction",
+                entity_id=transaction_id,
+                before_value=before,
+                after_value=_transaction_snapshot(conn, transaction_id),
+                operator=actor_label,
+                notes=clean_reason,
+            )
+    except Exception as exc:
+        _audit_transaction_void_failed(conn, transaction_id, clean_reason, actor_label, str(exc))
+        raise
+
+
+def _audit_transaction_void_attempt(
+    conn: sqlite3.Connection, transaction_id: str, reason: str, operator: str
+) -> None:
+    with conn:
+        add_audit_entry(
+            conn,
+            action_type="transaction_void_attempted",
+            entity_type="transaction",
+            entity_id=transaction_id,
+            before_value=_transaction_snapshot(conn, transaction_id),
+            after_value={"reason": reason},
+            operator=operator,
+            notes=reason,
+        )
+
+
+def _audit_transaction_void_failed(
+    conn: sqlite3.Connection,
+    transaction_id: str,
+    reason: str,
+    operator: str,
+    error: str,
+) -> None:
+    with conn:
+        add_audit_entry(
+            conn,
+            action_type="transaction_void_failed",
+            entity_type="transaction",
+            entity_id=transaction_id,
+            before_value=_transaction_snapshot(conn, transaction_id),
+            after_value={"reason": reason, "error": error},
+            operator=operator,
+            notes=reason,
+        )
+
+
+def _transaction_snapshot(
+    conn: sqlite3.Connection, transaction_id: str
+) -> dict[str, object] | None:
+    row = conn.execute(
+        "SELECT * FROM transactions WHERE id = ?", (transaction_id,)
+    ).fetchone()
+    return _row_to_dict(row)
+
+
+def list_transactions(conn: sqlite3.Connection, limit: int = 200) -> list[sqlite3.Row]:
+    return list(
         conn.execute(
             """
-            UPDATE transactions
-            SET status = 'voided', voided_at = ?, void_reason = ?
-            WHERE id = ?
+            SELECT *
+            FROM transactions
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
             """,
-            (datetime.now().isoformat(timespec="seconds"), reason.strip(), transaction_id),
+            (limit,),
         )
+    )
 
 
 def fetch_transaction(conn: sqlite3.Connection, transaction_id: str) -> sqlite3.Row:

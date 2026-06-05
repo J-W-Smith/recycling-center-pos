@@ -26,6 +26,10 @@
 - How often should backups be copied off the workstation?
 - How long should pre-restore backups be retained?
 - Should restore events require a written reason or second-person approval?
+- Should transaction voids require a second manager approval above a dollar threshold?
+- Should void reasons use a fixed reason list, free text, or both?
+- How should corrected replacement transactions be linked to the original transaction?
+- Should correction transactions affect the original transaction date or the current business day?
 - Do they need scale integration?
 - What scale model?
 - Do they use a cash drawer?

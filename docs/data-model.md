@@ -42,6 +42,9 @@ Audit-friendly transaction header.
 - `notes`
 - `status`: `active`, `voided`, or `corrected`
 - `voided_at`
+- `voided_by_operator_id`
+- `voided_by_operator_name_snapshot`
+- `voided_by_operator_initials_snapshot`
 - `void_reason`
 - `correction_of_transaction_id`
 - `total_cents`
@@ -92,7 +95,7 @@ Operators do not have full login accounts in this MVP. They may have an optional
 
 The manager PIN still controls Admin Settings access. Transactions store operator snapshots so renaming or deactivating an operator later does not rewrite old receipts or reports. `operator_verified` records whether the selected operator had successfully verified their individual PIN at transaction save time.
 
-The `operator` role can use normal transaction workflows. The `manager` and `admin` roles can access Admin Settings after manager PIN confirmation. Manager and admin are currently equivalent; admin is reserved for future separation. At least one active manager/admin must remain.
+The `operator` role can use normal transaction workflows. The `manager` and `admin` roles can access Admin Settings after manager PIN confirmation and can approve transaction voids. Manager and admin are currently equivalent; admin is reserved for future separation. At least one active manager/admin must remain.
 
 ## `app_settings`
 
@@ -125,7 +128,7 @@ Append-only admin/config change history.
 - `after_value`
 - `notes`
 
-Logged actions include operator creation/edit/deactivation/reactivation, operator PIN set/change/clear, operator PIN verification attempts when recorded by the UI, operator PIN enforcement setting changes, material creation/edit/deactivation/reactivation, rate creation, rate replacement/end-dating, manager PIN creation/change, audit log export, database backup creation, and database restore attempted/completed/failed events.
+Logged actions include operator creation/edit/deactivation/reactivation, operator PIN set/change/clear, operator PIN verification attempts when recorded by the UI, operator PIN enforcement setting changes, transaction void attempted/completed/failed events, material creation/edit/deactivation/reactivation, rate creation, rate replacement/end-dating, manager PIN creation/change, audit log export, database backup creation, and database restore attempted/completed/failed events.
 
 Operator audit snapshots intentionally expose only `pin_set` and `pin_updated_at`, not `pin_hash`.
 
@@ -135,11 +138,14 @@ Backup files are SQLite database copies. They contain transactions, receipt snap
 
 - Do not delete transactions by default.
 - Void/correct by adding status and reason metadata.
+- Require manager/admin approval, manager PIN confirmation, and a reason before voiding.
+- Keep original receipt snapshots unchanged when transactions are voided.
 - Store currency as integer cents.
 - Store weights and quantities as Decimal-compatible text.
 - Store receipt snapshots at transaction time.
 - Store operator display name and initials snapshots at transaction time.
 - Store operator PIN verification status at transaction time when available.
+- Store void approver display name and initials snapshots at void time.
 - Keep inactive materials and old rates for historical reporting.
 - Keep inactive operators for historical reporting.
 - Prevent deactivating or demoting the last active manager/admin.
