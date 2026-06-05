@@ -87,6 +87,8 @@ Lightweight local identity records.
 
 Operators do not have passwords in this MVP. The manager PIN still controls Admin Settings access. Transactions store operator snapshots so renaming or deactivating an operator later does not rewrite old receipts or reports.
 
+The `operator` role can use normal transaction workflows. The `manager` and `admin` roles can access Admin Settings after manager PIN confirmation. Manager and admin are currently equivalent; admin is reserved for future separation. At least one active manager/admin must remain.
+
 ## `app_settings`
 
 Local app-level settings.
@@ -105,7 +107,7 @@ Append-only admin/config change history.
 - `timestamp`
 - `operator`
 - `action_type`
-- `entity_type`: `material_type`, `rate`, or `settings`
+- `entity_type`: `material_type`, `rate`, `operator`, or `settings`
 - `entity_id`
 - `before_value`
 - `after_value`
@@ -125,6 +127,8 @@ Backup files are SQLite database copies. They contain transactions, receipt snap
 - Store operator display name and initials snapshots at transaction time.
 - Keep inactive materials and old rates for historical reporting.
 - Keep inactive operators for historical reporting.
+- Prevent deactivating or demoting the last active manager/admin.
+- Use centralized permission helpers for admin actions.
 - Use effective dates so price changes do not require code changes.
 - Prevent overlapping active rate periods for the same material.
 - Keep admin audit entries append-only in the UI.

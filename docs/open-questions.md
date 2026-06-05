@@ -10,6 +10,8 @@
 - Should the manager PIN be shared by role or should each employee have a separate login?
 - What operator roles are actually needed?
 - Should operators need individual PINs or passwords later?
+- Should manager and admin become meaningfully different roles?
+- Which actions should require admin rather than manager later?
 - Should managers be able to save transactions, or only approve/administer?
 - Should deactivated operators remain selectable for corrections only?
 - Who should review the admin audit log and how often?

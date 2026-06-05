@@ -15,6 +15,7 @@ from app.db import (
     create_operator,
     create_transaction,
     fetch_transaction,
+    get_operator,
     get_material_by_key,
     init_db,
     list_audit_entries,
@@ -221,6 +222,13 @@ def test_admin_audit_entries_use_selected_operator(conn: sqlite3.Connection) -> 
 def test_deactivating_operator_preserves_historical_transaction(
     conn: sqlite3.Connection, operator_id: int
 ) -> None:
+    create_operator(
+        conn,
+        display_name="Backup Manager",
+        initials="BM",
+        role="manager",
+        audit=False,
+    )
     material = get_material_by_key(conn, "glass_crv_count_small")
     tx_id = create_transaction(
         conn,
@@ -239,3 +247,48 @@ def test_deactivating_operator_preserves_historical_transaction(
     assert tx["operator_initials_snapshot"] == "TO"
     assert "Operator: Test Operator (TO)" in tx["receipt_snapshot_text"]
 
+
+def test_cannot_deactivate_last_active_manager_admin(
+    conn: sqlite3.Connection, operator_id: int
+) -> None:
+    with pytest.raises(ValueError, match="At least one active manager or admin"):
+        set_operator_active(conn, operator_id, False, audit=False)
+
+
+def test_cannot_demote_last_active_manager_admin(
+    conn: sqlite3.Connection, operator_id: int
+) -> None:
+    with pytest.raises(ValueError, match="At least one active manager or admin"):
+        update_operator(
+            conn,
+            operator_id,
+            display_name="Test Operator",
+            initials="TO",
+            role="operator",
+            active=True,
+            audit=False,
+        )
+
+
+def test_can_demote_manager_when_another_manager_exists(
+    conn: sqlite3.Connection, operator_id: int
+) -> None:
+    create_operator(
+        conn,
+        display_name="Backup Manager",
+        initials="BM",
+        role="admin",
+        audit=False,
+    )
+
+    update_operator(
+        conn,
+        operator_id,
+        display_name="Test Operator",
+        initials="TO",
+        role="operator",
+        active=True,
+        audit=False,
+    )
+
+    assert get_operator(conn, operator_id).role == "operator"

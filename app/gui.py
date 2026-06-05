@@ -40,6 +40,7 @@ from app.maintenance import (
     get_connection_db_path,
     restore_database_from_backup,
 )
+from app.permissions import has_permission
 from app.pricing import dollars_to_cents, decimal_from_user, format_cents
 from app.reports import export_daily_report_csv, generate_daily_report, render_daily_report_html
 
@@ -252,6 +253,29 @@ class RecyclingPOSApp(tk.Tk):
         operator = self.current_operator()
         return format_operator_label(operator) if operator is not None else "manager"
 
+    def require_permission(self, permission: str, action_label: str) -> bool:
+        operator = self.current_operator()
+        if has_permission(operator, permission):
+            return True
+        if operator is None:
+            operator_label = "unknown"
+            reason = "No active operator is selected."
+        else:
+            operator_label = format_operator_label(operator)
+            reason = f"{operator.role} role cannot {action_label.lower()}."
+        with self.conn:
+            from app.db import record_admin_access_denied
+
+            record_admin_access_denied(
+                self.conn,
+                permission=permission,
+                reason=reason,
+                operator=operator_label,
+                action_label=action_label,
+            )
+        messagebox.showerror("Access denied", reason)
+        return False
+
     def add_line_item(self) -> None:
         material = self.material_by_label.get(self.material_var.get())
         if material is None:
@@ -350,6 +374,8 @@ class RecyclingPOSApp(tk.Tk):
         AdminSettingsWindow(self, self.conn)
 
     def _manager_pin_allows_admin(self) -> bool:
+        if not self.require_permission("access_admin_settings", "open Admin Settings"):
+            return False
         if not has_manager_pin(self.conn):
             pin = simpledialog.askstring(
                 "Create Manager PIN",
@@ -823,6 +849,8 @@ class AdminSettingsWindow(tk.Toplevel):
         self.operator_notes.set("")
 
     def save_operator(self) -> None:
+        if not self.app.require_permission("manage_operators", "manage operators"):
+            return
         audit_operator = self.app.current_operator_audit_label()
         try:
             if self.selected_operator_id is None:
@@ -853,6 +881,8 @@ class AdminSettingsWindow(tk.Toplevel):
         self.refresh_audit_log()
 
     def toggle_operator_active(self) -> None:
+        if not self.app.require_permission("manage_operators", "manage operators"):
+            return
         if self.selected_operator_id is None:
             messagebox.showerror("No operator selected", "Select an operator first.")
             return
@@ -897,6 +927,8 @@ class AdminSettingsWindow(tk.Toplevel):
         self.material_notes.set("")
 
     def save_material(self) -> None:
+        if not self.app.require_permission("manage_materials", "manage materials"):
+            return
         try:
             sort_order = int(self.material_sort.get() or "0")
             if self.selected_material_id is None:
@@ -933,6 +965,8 @@ class AdminSettingsWindow(tk.Toplevel):
         self.refresh_rates()
 
     def toggle_material_active(self) -> None:
+        if not self.app.require_permission("manage_materials", "manage materials"):
+            return
         if self.selected_material_id is None:
             messagebox.showerror("No material selected", "Select a material first.")
             return
@@ -972,6 +1006,8 @@ class AdminSettingsWindow(tk.Toplevel):
         self.rate_notes.set("")
 
     def save_new_rate(self) -> None:
+        if not self.app.require_permission("manage_rates", "manage rates"):
+            return
         material = self.material_rate_labels.get(self.rate_material.get())
         if material is None:
             messagebox.showerror("Rate validation", "Select a material.")
@@ -996,6 +1032,8 @@ class AdminSettingsWindow(tk.Toplevel):
         self.refresh_audit_log()
 
     def save_rate_metadata(self) -> None:
+        if not self.app.require_permission("manage_rates", "manage rates"):
+            return
         if self.selected_rate_id is None:
             messagebox.showerror("No rate selected", "Select a rate first.")
             return
@@ -1056,6 +1094,8 @@ class AdminSettingsWindow(tk.Toplevel):
         self.audit_detail.insert("1.0", detail)
 
     def save_manager_pin_change(self) -> None:
+        if not self.app.require_permission("change_manager_pin", "change the manager PIN"):
+            return
         if self.new_pin.get() != self.confirm_pin.get():
             messagebox.showerror("PIN change failed", "New PIN entries did not match.")
             return
@@ -1076,6 +1116,8 @@ class AdminSettingsWindow(tk.Toplevel):
         messagebox.showinfo("PIN changed", "Manager PIN changed.")
 
     def export_audit_log(self) -> None:
+        if not self.app.require_permission("export_audit_log", "export the audit log"):
+            return
         entity_type = self.audit_filter.get()
         if entity_type == "all":
             entity_type = None
@@ -1102,6 +1144,8 @@ class AdminSettingsWindow(tk.Toplevel):
         messagebox.showinfo("Audit export complete", f"Exported {path}")
 
     def create_backup(self) -> None:
+        if not self.app.require_permission("create_backup", "create a database backup"):
+            return
         db_path = get_connection_db_path(self.conn)
         initial_dir = db_path.parent if db_path is not None else Path("data")
         path = filedialog.asksaveasfilename(
@@ -1127,6 +1171,8 @@ class AdminSettingsWindow(tk.Toplevel):
         messagebox.showinfo("Backup complete", f"Backup created:\n{path}")
 
     def restore_from_backup(self) -> None:
+        if not self.app.require_permission("restore_backup", "restore the database"):
+            return
         restore_path = filedialog.askopenfilename(
             parent=self,
             title="Choose Backup To Restore",

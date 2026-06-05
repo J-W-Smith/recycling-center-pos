@@ -18,6 +18,9 @@
 - Operator management tab in Admin Settings.
 - Operator snapshots on transactions and receipts.
 - Daily report operator summary.
+- Centralized role/permission helpers for Admin Settings actions.
+- Admin Settings access denied for plain operators.
+- Last active manager/admin deactivation/demotion safeguards.
 - Material add/edit plus activate/deactivate behavior.
 - Rate add/update metadata behavior with effective dates and overlap detection.
 - Text receipt snapshot display.
@@ -27,6 +30,7 @@
 - Tests for manager PIN hashing/validation/change, audit log entries, before/after snapshots, and existing-database migrations.
 - Tests for audit CSV export, database backup copies, restore rejection, pre-restore backup creation, and valid restore replacement.
 - Tests for operator creation, migration, inactive filtering, transaction requirements, receipt snapshots, report summaries, admin audit attribution, and historical preservation.
+- Tests for operator/manager/admin permissions, admin denial audit entries, backup/restore/audit-export permissions, and last manager/admin safeguards.
 
 ## Deferred
 
@@ -37,9 +41,8 @@
 - Employee login/permission model.
 - Customer profile or ID capture.
 - Business-specific payout approval rules.
-- Role-protected admin access.
 - Operator passwords or full employee authentication.
-- Role-based permission enforcement beyond the manager PIN gate.
+- Fine-grained separation between manager and admin roles.
 - Audit log signing, retention policy automation, or tamper-evidence.
 - PDF exports.
 - Installer packaging.
@@ -56,3 +59,4 @@
 - Do not present local PIN protection as full security or compliance certification.
 - Do not silently restore a database without warning, PIN confirmation, and a pre-restore backup.
 - Do not treat operator selection as secure authentication.
+- Do not allow deactivating or demoting the last active manager/admin.

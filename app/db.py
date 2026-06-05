@@ -313,6 +313,25 @@ def add_audit_entry(
     )
 
 
+def record_admin_access_denied(
+    conn: sqlite3.Connection,
+    *,
+    permission: str,
+    reason: str,
+    operator: str = "unknown",
+    action_label: str = "Admin action",
+) -> None:
+    add_audit_entry(
+        conn,
+        action_type="admin_access_denied",
+        entity_type="settings",
+        before_value=None,
+        after_value={"permission": permission, "reason": reason},
+        operator=operator,
+        notes=f"Denied: {action_label}",
+    )
+
+
 def list_audit_entries(
     conn: sqlite3.Connection, entity_type: str | None = None, limit: int = 200
 ) -> list[sqlite3.Row]:
@@ -458,6 +477,14 @@ def update_operator(
         raise ValueError("Operator display name is required.")
     if not normalized_initials:
         raise ValueError("Operator initials are required.")
+    existing = get_operator(conn, operator_id)
+    if (
+        existing.active
+        and existing.role in {"manager", "admin"}
+        and (not active or role == "operator")
+        and _active_admin_operator_count(conn, exclude_operator_id=operator_id) == 0
+    ):
+        raise ValueError("At least one active manager or admin operator is required.")
     with conn:
         before = _operator_snapshot(conn, operator_id)
         result = conn.execute(
@@ -504,6 +531,14 @@ def set_operator_active(
     operator: str = "manager",
     audit_notes: str = "",
 ) -> None:
+    existing = get_operator(conn, operator_id)
+    if (
+        existing.active
+        and existing.role in {"manager", "admin"}
+        and not active
+        and _active_admin_operator_count(conn, exclude_operator_id=operator_id) == 0
+    ):
+        raise ValueError("At least one active manager or admin operator is required.")
     with conn:
         before = _operator_snapshot(conn, operator_id)
         result = conn.execute(
@@ -536,6 +571,21 @@ def format_operator_label(operator: Operator) -> str:
 def _operator_snapshot(conn: sqlite3.Connection, operator_id: int) -> dict[str, object] | None:
     row = conn.execute("SELECT * FROM operators WHERE id = ?", (operator_id,)).fetchone()
     return _row_to_dict(row)
+
+
+def _active_admin_operator_count(
+    conn: sqlite3.Connection, exclude_operator_id: int | None = None
+) -> int:
+    sql = """
+        SELECT COUNT(*) AS count
+        FROM operators
+        WHERE active = 1 AND role IN ('manager', 'admin')
+    """
+    params: tuple[object, ...] = ()
+    if exclude_operator_id is not None:
+        sql += " AND id != ?"
+        params = (exclude_operator_id,)
+    return int(conn.execute(sql, params).fetchone()["count"])
 
 
 def _validate_operator_role(role: str) -> None:

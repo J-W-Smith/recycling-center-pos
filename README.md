@@ -15,6 +15,7 @@ The project is designed around local-first operation on an older Windows 11 Inte
 - Local SQLite database backup and cautious restore controls.
 - Operator records and active operator selection for transactions.
 - Operator snapshots on transactions, receipts, reports, and audit entries.
+- Lightweight role-based admin permissions using operator roles and the manager PIN gate.
 - CRV and non-CRV line items tracked separately.
 - Count, weight, and manual payout line items.
 - Transaction save flow with receipt snapshot text stored at transaction time.
@@ -50,6 +51,14 @@ The first time Admin Settings is opened, the app prompts for a manager PIN. The 
 On first app launch, if no active operator exists, the app prompts to create one. Operators are not password accounts yet. They identify who performed transactions and admin changes. The manager PIN remains the gate for Admin Settings.
 
 Use the Operators tab in Admin Settings to add/edit operators, set initials, assign a lightweight role (`operator`, `manager`, or `admin`), and deactivate/reactivate operators. Operators are deactivated instead of deleted so historical transactions and audit records remain understandable.
+
+Role behavior in the current MVP:
+
+- `operator`: can create transactions and use main-screen reporting/receipt tools, but cannot open Admin Settings or perform admin actions.
+- `manager`: can open Admin Settings after manager PIN confirmation and can manage materials, rates, operators, audit exports, backups, restores, and manager PIN changes.
+- `admin`: currently has the same permissions as `manager`; it is reserved for cleaner future separation.
+
+The app prevents deactivating or demoting the last active manager/admin operator. That protects the business from locking itself out of Admin Settings.
 
 Materials can be added, edited, deactivated, or reactivated. Deactivated materials are hidden from new transaction input but remain in historical transactions and reports.
 
@@ -90,11 +99,11 @@ This repository is not a compliance-certified system. California CRV rules, cert
 The initial CRV assumptions are planning placeholders only.
 The admin screen makes CRV values configurable, but it does not replace compliance review.
 
-The manager PIN is local workstation access control for the MVP. Operator selection identifies who did the work, but it is not a password login and does not prevent impersonation by itself. This does not replace OS account security, backups, disk encryption, employee-specific authentication, or production audit controls. Restoring an old backup can roll back operational records, so restore should be manager-only and documented in operating procedures.
+The manager PIN is the main local security gate for admin access. Operator role selection controls which actions are available, but it is not true authentication and does not prevent impersonation by itself. This does not replace OS account security, backups, disk encryption, employee-specific authentication, or production audit controls. Restoring an old backup can roll back operational records, so restore should be manager-only and documented in operating procedures.
 
 ## Intentionally Not Built Yet
 
-- Employee authentication and permissions.
+- Employee password authentication.
 - Operator passwords or individual login enforcement.
 - Scale integration.
 - Cash drawer integration.
