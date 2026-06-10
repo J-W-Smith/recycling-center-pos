@@ -4,6 +4,12 @@ Planning-first scaffold and local MVP prototype for a California recycling cente
 
 The project is designed around local-first operation on an older Windows 11 Intel workstation. The preferred first UI is a lightweight Tkinter desktop app with a plain, classic Windows feel rather than a heavy web frontend.
 
+## Static Demo
+
+GitHub Pages demo: https://j-w-smith.github.io/recycling-center-pos/
+
+The demo is static HTML/CSS/JavaScript only. It uses fake sample data and is not connected to a real database. The desktop Python/Tkinter/SQLite app remains the actual MVP.
+
 ## Current MVP Scope
 
 - SQLite local storage.

@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recycling Center POS Static Demo</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-shell">
+    <div class="title-bar">
+      <span class="window-icon" aria-hidden="true"></span>
+      <span>Recycling Center POS - Static Demo</span>
+    </div>
+    <div class="hero">
+      <div>
+        <p class="eyebrow">Static demo only — not connected to a real database.</p>
+        <h1>Recycling Center POS</h1>
+        <p class="lead">A lightweight local-first POS prototype for recycling center payout workflows.</p>
+      </div>
+      <div class="hero-actions">
+        <a class="button primary" href="#new-transaction">Try the walkthrough</a>
+        <a class="button" href="https://github.com/J-W-Smith/recycling-center-pos">View GitHub repo</a>
+      </div>
+    </div>
+    <div class="notice">
+      MVP prototype. Not compliance-certified. California CRV rules require final business/legal review before production use.
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="nav-panel" aria-label="Demo sections">
+      <button class="tab active" data-target="dashboard">Dashboard</button>
+      <button class="tab" data-target="new-transaction">New Transaction</button>
+      <button class="tab" data-target="receipt">Receipt Preview</button>
+      <button class="tab" data-target="history">Transaction History</button>
+      <button class="tab" data-target="voids">Voids</button>
+      <button class="tab" data-target="daily-report">Daily Report</button>
+      <button class="tab" data-target="admin">Admin Settings</button>
+      <button class="tab" data-target="operators">Operators</button>
+      <button class="tab" data-target="audit">Audit Log</button>
+      <button class="tab" data-target="backup">Backup/Restore</button>
+    </aside>
+
+    <section class="content-panel">
+      <section id="dashboard" class="screen active">
+        <div class="screen-title">
+          <h2>Dashboard</h2>
+          <span class="badge">Sample operating day</span>
+        </div>
+        <div class="feature-grid">
+          <article class="metric"><span>Today's Transactions</span><strong>14</strong></article>
+          <article class="metric"><span>Total Paid</span><strong>$486.25</strong></article>
+          <article class="metric"><span>CRV Paid</span><strong>$332.10</strong></article>
+          <article class="metric"><span>Non-CRV Paid</span><strong>$154.15</strong></article>
+          <article class="metric"><span>Voids Today</span><strong>1</strong></article>
+          <article class="metric wide"><span>Active Operator</span><strong>Alex M. / Manager / Verified</strong></article>
+        </div>
+        <div class="panel">
+          <h3>MVP Feature Highlights</h3>
+          <ul class="pill-list">
+            <li>local SQLite storage</li>
+            <li>configurable materials/rates</li>
+            <li>CRV vs non-CRV tracking</li>
+            <li>weight/count/manual payouts</li>
+            <li>receipt snapshots</li>
+            <li>operator identity</li>
+            <li>manager PIN protection</li>
+            <li>role-based admin permissions</li>
+            <li>optional operator PIN verification</li>
+            <li>audit log</li>
+            <li>backup/restore</li>
+            <li>controlled void workflow</li>
+            <li>daily reports</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="new-transaction" class="screen">
+        <div class="screen-title">
+          <h2>New Transaction</h2>
+          <span class="badge">Clickable form mockup</span>
+        </div>
+        <div class="two-column">
+          <form class="panel classic-form" id="demo-form">
+            <label>Operator
+              <select id="operator-select">
+                <option>Alex M. / Manager</option>
+                <option>Jordan T. / Operator</option>
+                <option>Riley C. / Admin</option>
+              </select>
+            </label>
+            <label>Verification Status
+              <input id="verification-status" value="Verified" readonly>
+            </label>
+            <label>Material
+              <select id="material-select"></select>
+            </label>
+            <label>Unit Type
+              <input id="unit-type" readonly>
+            </label>
+            <label>Quantity
+              <input id="quantity" type="number" min="0" step="0.01" value="12">
+            </label>
+            <label>Rate
+              <input id="rate" readonly>
+            </label>
+            <div class="button-row">
+              <button class="button" type="button" id="add-line">Add Line</button>
+              <button class="button primary" type="button" id="save-transaction">Save Transaction</button>
+            </div>
+            <p class="hint">This is a static walkthrough. Real transaction saving happens only in the desktop app.</p>
+          </form>
+          <div class="panel">
+            <h3>Line Items</h3>
+            <table>
+              <thead>
+                <tr><th>Material</th><th>Unit</th><th>Qty</th><th>Rate</th><th>Subtotal</th></tr>
+              </thead>
+              <tbody id="line-items"></tbody>
+              <tfoot>
+                <tr><th colspan="4">Total Payout</th><th id="transaction-total">$0.00</th></tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="receipt" class="screen">
+        <div class="screen-title">
+          <h2>Receipt Preview</h2>
+          <span class="badge">Snapshot example</span>
+        </div>
+        <div class="receipt">
+          <pre>
+RECYCLING CENTER NAME
+CUSTOMER RECEIPT / OFFICE COPY
+------------------------------------------
+Date/Time: 2026-06-10 09:42
+Transaction ID: DEMO-1042
+Operator: AM
+Payout Method: Cash
+------------------------------------------
+Aluminum CRV by Weight
+  Type: CRV / Aluminum
+  Qty: 18.5 lb
+  Rate: $1.72 per lb
+  Subtotal: $31.82
+Plastic CRV by Count
+  Type: CRV / Plastic
+  Qty: 42 count
+  Rate: $0.05 each
+  Subtotal: $2.10
+Manual Adjustment
+  Type: NON-CRV / Adjustment
+  Qty: 1 manual
+  Rate: $3.00
+  Subtotal: $3.00
+------------------------------------------
+TOTAL PAID: $36.92
+
+Receipt snapshot stored at transaction time.
+Print two copies: customer copy and office copy.
+          </pre>
+        </div>
+      </section>
+
+      <section id="history" class="screen">
+        <div class="screen-title">
+          <h2>Transaction History</h2>
+          <span class="badge">Sample records</span>
+        </div>
+        <div class="panel">
+          <table>
+            <thead>
+              <tr><th>ID</th><th>Time</th><th>Status</th><th>Operator</th><th>Total</th><th>Note</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>DEMO-1042</td><td>09:42</td><td><span class="status good">Completed</span></td><td>Alex M.</td><td>$36.92</td><td>Standard payout</td></tr>
+              <tr><td>DEMO-1038</td><td>08:55</td><td><span class="status bad">Voided</span></td><td>Riley C.</td><td>$18.40</td><td>Wrong material selected</td></tr>
+              <tr><td>DEMO-1039</td><td>09:01</td><td><span class="status good">Replacement</span></td><td>Riley C.</td><td>$20.15</td><td>Replacement transaction placeholder</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <h3>Correction Note</h3>
+          <p>Full correction workflow is deferred. Current MVP recommendation is void + replacement transaction.</p>
+        </div>
+      </section>
+
+      <section id="voids" class="screen">
+        <div class="screen-title">
+          <h2>Voids</h2>
+          <span class="badge">Controlled workflow</span>
+        </div>
+        <div class="process-grid">
+          <article class="panel"><h3>1. Permission Check</h3><p>Void requires manager/admin role. Plain operators cannot void completed transactions.</p></article>
+          <article class="panel"><h3>2. Manager PIN</h3><p>Manager PIN confirmation is required. PIN values are never logged in this demo or the MVP.</p></article>
+          <article class="panel"><h3>3. Reason Required</h3><p>The approver must enter a reason such as wrong material, duplicate ticket, or payout correction.</p></article>
+          <article class="panel"><h3>4. Audit Logged</h3><p>The original receipt is preserved, the transaction is marked voided, and the action is audit logged.</p></article>
+        </div>
+        <div class="notice subdued">Voided totals are excluded from normal payout totals and shown separately in reports.</div>
+      </section>
+
+      <section id="daily-report" class="screen">
+        <div class="screen-title">
+          <h2>Daily Report</h2>
+          <span class="badge">Fake daily closeout</span>
+        </div>
+        <div class="feature-grid">
+          <article class="metric"><span>Transaction Count</span><strong>14</strong></article>
+          <article class="metric"><span>Total Paid</span><strong>$486.25</strong></article>
+          <article class="metric"><span>CRV Total</span><strong>$332.10</strong></article>
+          <article class="metric"><span>Non-CRV Total</span><strong>$154.15</strong></article>
+        </div>
+        <div class="two-column">
+          <div class="panel">
+            <h3>Material Breakdown</h3>
+            <table>
+              <thead><tr><th>Material</th><th>Qty</th><th>Total</th></tr></thead>
+              <tbody>
+                <tr><td>Aluminum CRV by Weight</td><td>126.5 lb</td><td>$217.58</td></tr>
+                <tr><td>Plastic CRV by Weight</td><td>89.0 lb</td><td>$71.20</td></tr>
+                <tr><td>Glass CRV by Weight</td><td>420.0 lb</td><td>$43.32</td></tr>
+                <tr><td>Scrap Aluminum by Weight</td><td>132.4 lb</td><td>$154.15</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="panel">
+            <h3>Operator Summary</h3>
+            <table>
+              <thead><tr><th>Operator</th><th>Transactions</th><th>Total</th></tr></thead>
+              <tbody>
+                <tr><td>Alex M.</td><td>8</td><td>$284.65</td></tr>
+                <tr><td>Jordan T.</td><td>5</td><td>$183.20</td></tr>
+                <tr><td>Riley C.</td><td>1</td><td>$18.40 voided</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>Voided Transaction Section</h3>
+          <p>Void count: 1. Voided amount: $18.40. CSV export is available in the desktop MVP.</p>
+        </div>
+      </section>
+
+      <section id="admin" class="screen">
+        <div class="screen-title">
+          <h2>Admin Settings</h2>
+          <span class="badge">Read-only simulation</span>
+        </div>
+        <div class="process-grid">
+          <article class="panel"><h3>Material Settings</h3><p>Manage active/inactive material inputs for CRV and non-CRV workflows.</p></article>
+          <article class="panel"><h3>Effective-Dated Rates</h3><p>Rates keep start/end dates so old receipts remain explainable after price changes.</p></article>
+          <article class="panel"><h3>Role Permissions</h3><p>Managers/admins can access protected settings after manager PIN confirmation.</p></article>
+          <article class="panel"><h3>Operator PIN Settings</h3><p>Optional verification settings can require operator PINs for transactions or admin actions.</p></article>
+        </div>
+      </section>
+
+      <section id="operators" class="screen">
+        <div class="screen-title">
+          <h2>Operators</h2>
+          <span class="badge">Sample identities</span>
+        </div>
+        <div class="panel">
+          <table>
+            <thead><tr><th>Name</th><th>Initials</th><th>Role</th><th>Status</th><th>PIN</th></tr></thead>
+            <tbody>
+              <tr><td>Alex M.</td><td>AM</td><td>Manager</td><td>Active</td><td>Set</td></tr>
+              <tr><td>Jordan T.</td><td>JT</td><td>Operator</td><td>Active</td><td>Not set</td></tr>
+              <tr><td>Riley C.</td><td>RC</td><td>Admin</td><td>Active</td><td>Set</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hint">Names here are fake sample data. The desktop app stores operator snapshots on each transaction for history.</p>
+      </section>
+
+      <section id="audit" class="screen">
+        <div class="screen-title">
+          <h2>Audit Log</h2>
+          <span class="badge">Sample events</span>
+        </div>
+        <div class="panel">
+          <table>
+            <thead><tr><th>Time</th><th>Operator</th><th>Action</th><th>Entity</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td>08:05</td><td>Alex M.</td><td>material_created</td><td>material_type</td><td>Added demo material</td></tr>
+              <tr><td>08:12</td><td>Alex M.</td><td>rate_changed</td><td>rate</td><td>New effective date</td></tr>
+              <tr><td>08:20</td><td>Riley C.</td><td>operator_pin_changed</td><td>operator</td><td>PIN reset, no PIN value stored</td></tr>
+              <tr><td>08:30</td><td>Alex M.</td><td>database_backup_created</td><td>settings</td><td>Local backup created</td></tr>
+              <tr><td>08:45</td><td>Jordan T.</td><td>admin_access_denied</td><td>settings</td><td>Operator role denied</td></tr>
+              <tr><td>09:02</td><td>Riley C.</td><td>transaction_void_completed</td><td>transaction</td><td>Wrong material selected</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="backup" class="screen">
+        <div class="screen-title">
+          <h2>Backup/Restore</h2>
+          <span class="badge">Local-first safety controls</span>
+        </div>
+        <div class="process-grid">
+          <article class="panel"><h3>Audit CSV Export</h3><p>Export audit log rows for review and recordkeeping.</p></article>
+          <article class="panel"><h3>Local SQLite Backup</h3><p>Create a full local database copy containing transactions, receipts, settings, and audit log.</p></article>
+          <article class="panel"><h3>Cautious Restore</h3><p>Restore requires warning confirmation and manager PIN confirmation.</p></article>
+          <article class="panel"><h3>Pre-Restore Backup</h3><p>The current database is backed up before restore replaces it.</p></article>
+          <article class="panel"><h3>Validation</h3><p>Restore checks for expected tables before replacing the active local database.</p></article>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Static sample data only.</span>
+    <span>Desktop MVP: Python + Tkinter + SQLite.</span>
+  </footer>
+
+  <script src="demo.js"></script>
+</body>
+</html>
