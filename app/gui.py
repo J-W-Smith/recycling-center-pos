@@ -51,8 +51,22 @@ from app.maintenance import (
 )
 from app.permissions import has_permission
 from app.pricing import dollars_to_cents, decimal_from_user, format_cents
-from app.receipt import mark_voided_receipt_text
-from app.reports import export_daily_report_csv, generate_daily_report, render_daily_report_html
+from app.receipt import (
+    ReceiptPrintUnavailable,
+    export_receipt_pdf,
+    mark_voided_receipt_text,
+    print_receipt_text,
+)
+from app.reports import (
+    export_daily_report_csv,
+    export_feet_closeout_csv,
+    export_feet_closeout_pdf,
+    generate_daily_report,
+    generate_feet_closeout_report,
+    record_feet_closeout,
+    render_daily_report_html,
+    render_feet_closeout_html,
+)
 
 
 class RecyclingPOSApp(tk.Tk):
@@ -68,6 +82,7 @@ class RecyclingPOSApp(tk.Tk):
         self.operators: list[Operator] = []
         self.operator_by_label: dict[str, Operator] = {}
         self.verified_operator_id: int | None = None
+        self.last_transaction_id: str | None = None
         self.pending_items: list[LineItemInput] = []
         self.material_combo: ttk.Combobox | None = None
         self.operator_combo: ttk.Combobox | None = None
@@ -181,6 +196,17 @@ class RecyclingPOSApp(tk.Tk):
 
         actions = ttk.Frame(root)
         actions.pack(fill="x", pady=(0, 8))
+        ttk.Button(actions, text="Print Receipt", command=self.print_current_receipt).pack(
+            side="left", padx=(0, 8)
+        )
+        ttk.Button(actions, text="Save/Export Receipt", command=self.export_current_receipt).pack(
+            side="left", padx=(0, 8)
+        )
+        ttk.Button(
+            actions,
+            text="Run FEET End-of-Day Closeout",
+            command=self.run_feet_closeout,
+        ).pack(side="left", padx=(0, 8))
         ttk.Button(actions, text="Generate Today Report", command=self.show_daily_report).pack(
             side="left", padx=(0, 8)
         )
@@ -479,6 +505,7 @@ class RecyclingPOSApp(tk.Tk):
             messagebox.showerror("Transaction validation", str(exc))
             return
         tx = fetch_transaction(self.conn, tx_id)
+        self.last_transaction_id = tx_id
         self.pending_items.clear()
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -498,6 +525,132 @@ class RecyclingPOSApp(tk.Tk):
             report, Path("data/exports") / f"daily-report-{date.today().isoformat()}.csv"
         )
         messagebox.showinfo("CSV exported", f"Exported {path}")
+
+    def print_current_receipt(self) -> None:
+        if not self.require_permission("print_receipt", "print receipts"):
+            return
+        receipt_text = self.current_receipt_text()
+        if receipt_text is None:
+            messagebox.showerror("No receipt", "Save or select a transaction receipt first.")
+            return
+        try:
+            print_receipt_text(receipt_text)
+        except ReceiptPrintUnavailable as exc:
+            messagebox.showerror("Printer unavailable", str(exc))
+            return
+        except OSError as exc:
+            messagebox.showerror("Print failed", str(exc))
+            return
+        messagebox.showinfo("Receipt sent", "Receipt sent to the operating system print queue.")
+
+    def export_current_receipt(self) -> None:
+        if not self.require_permission("export_receipt", "export receipts"):
+            return
+        receipt_text = self.current_receipt_text()
+        if receipt_text is None:
+            messagebox.showerror("No receipt", "Save or select a transaction receipt first.")
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Export Receipt PDF",
+            initialdir=str(Path("data/exports")),
+            initialfile=f"receipt-{date.today().isoformat()}.pdf",
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            export_receipt_pdf(receipt_text, path, title="Recycling POS Receipt")
+        except OSError as exc:
+            messagebox.showerror("Receipt export failed", str(exc))
+            return
+        messagebox.showinfo("Receipt exported", f"Exported {path}")
+
+    def current_receipt_text(self) -> str | None:
+        if self.last_transaction_id:
+            row = fetch_transaction(self.conn, self.last_transaction_id)
+            return _receipt_text_from_transaction_row(row)
+        text = self.output.get("1.0", "end").strip()
+        if "Transaction ID:" in text:
+            return text
+        return None
+
+    def run_feet_closeout(self) -> None:
+        if not self.require_admin_action("run_feet_closeout", "run FEET closeout"):
+            return
+        operator = self.current_operator()
+        if operator is None:
+            messagebox.showerror("Operator required", "Select an active manager/admin operator.")
+            return
+        if not has_manager_pin(self.conn):
+            messagebox.showerror(
+                "Manager PIN required",
+                "Create a manager PIN in Admin Settings before running FEET closeout.",
+            )
+            return
+        manager_pin = self.prompt_manager_pin("run FEET closeout")
+        if manager_pin is None:
+            return
+        expected_cash = self._optional_money_prompt("Expected Cash", "Expected cash amount:")
+        if expected_cash is False:
+            return
+        actual_cash = self._optional_money_prompt("Actual Cash", "Actual cash amount:")
+        if actual_cash is False:
+            return
+        discrepancy_notes = simpledialog.askstring(
+            "Discrepancy Notes",
+            "Optional discrepancy notes:",
+            parent=self,
+        )
+        if discrepancy_notes is None:
+            discrepancy_notes = ""
+        try:
+            report = generate_feet_closeout_report(
+                self.conn,
+                date.today(),
+                expected_cash_cents=expected_cash,
+                actual_cash_cents=actual_cash,
+                discrepancy_notes=discrepancy_notes,
+                operator_attestation=f"{format_operator_label(operator)} attests review complete",
+                manager_approval="Manager PIN approval captured",
+            )
+            closeout_id = record_feet_closeout(
+                self.conn,
+                report,
+                generated_by_operator_id=operator.id,
+                manager_pin=manager_pin,
+                operator_verified=self.operator_is_verified(operator),
+                operator_label=self.current_operator_audit_label(),
+            )
+            export_dir = Path("data/exports")
+            csv_path = export_feet_closeout_csv(
+                report, export_dir / f"feet-closeout-{report['date']}.csv"
+            )
+            pdf_path = export_feet_closeout_pdf(
+                report, export_dir / f"feet-closeout-{report['date']}.pdf"
+            )
+        except (PermissionError, ValueError, OSError) as exc:
+            messagebox.showerror("FEET closeout failed", str(exc))
+            return
+        self.output.delete("1.0", "end")
+        self.output.insert("1.0", render_feet_closeout_html(report))
+        messagebox.showinfo(
+            "FEET closeout complete",
+            f"Closeout #{closeout_id} saved.\nCSV: {csv_path}\nPDF: {pdf_path}",
+        )
+
+    def _optional_money_prompt(self, title: str, prompt: str) -> int | None | bool:
+        raw = simpledialog.askstring(title, prompt + "\nLeave blank if not counted.", parent=self)
+        if raw is None:
+            return False
+        if not raw.strip():
+            return None
+        try:
+            return dollars_to_cents(raw)
+        except (InvalidOperation, ValueError) as exc:
+            messagebox.showerror("Invalid amount", str(exc))
+            return False
 
     def open_transaction_history(self) -> None:
         if not self.require_permission(
@@ -607,6 +760,18 @@ class TransactionHistoryWindow(tk.Toplevel):
             side="left", padx=(0, 8)
         )
         if self.app.current_operator() is not None:
+            if self.app.require_permission("print_receipt", "print receipts"):
+                ttk.Button(
+                    buttons,
+                    text="Print Receipt",
+                    command=self.print_selected_receipt,
+                ).pack(side="left", padx=(0, 8))
+            if self.app.require_permission("export_receipt", "export receipts"):
+                ttk.Button(
+                    buttons,
+                    text="Export Receipt PDF",
+                    command=self.export_selected_receipt,
+                ).pack(side="left", padx=(0, 8))
             if self.app.require_permission("void_transaction", "void transactions"):
                 ttk.Button(
                     buttons,
@@ -622,6 +787,48 @@ class TransactionHistoryWindow(tk.Toplevel):
 
         self.detail = tk.Text(root, height=24, font=("Courier New", 9), wrap="word")
         self.detail.pack(fill="both", expand=True)
+
+    def selected_receipt_text(self) -> str | None:
+        if self.selected_transaction_id is None:
+            messagebox.showerror("No transaction selected", "Select a transaction first.")
+            return None
+        row = fetch_transaction(self.conn, self.selected_transaction_id)
+        return _receipt_text_from_transaction_row(row)
+
+    def print_selected_receipt(self) -> None:
+        receipt_text = self.selected_receipt_text()
+        if receipt_text is None:
+            return
+        try:
+            print_receipt_text(receipt_text)
+        except ReceiptPrintUnavailable as exc:
+            messagebox.showerror("Printer unavailable", str(exc))
+            return
+        except OSError as exc:
+            messagebox.showerror("Print failed", str(exc))
+            return
+        messagebox.showinfo("Receipt sent", "Receipt sent to the operating system print queue.")
+
+    def export_selected_receipt(self) -> None:
+        receipt_text = self.selected_receipt_text()
+        if receipt_text is None:
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Export Receipt PDF",
+            initialdir=str(Path("data/exports")),
+            initialfile=f"receipt-{self.selected_transaction_id}.pdf",
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            export_receipt_pdf(receipt_text, path, title="Recycling POS Receipt")
+        except OSError as exc:
+            messagebox.showerror("Receipt export failed", str(exc))
+            return
+        messagebox.showinfo("Receipt exported", f"Exported {path}")
 
     def refresh_transactions(self) -> None:
         for item in self.tree.get_children():
@@ -647,13 +854,7 @@ class TransactionHistoryWindow(tk.Toplevel):
             return
         self.selected_transaction_id = selected[0]
         row = fetch_transaction(self.conn, self.selected_transaction_id)
-        receipt_text = row["receipt_snapshot_text"]
-        if row["status"] == "voided":
-            receipt_text = mark_voided_receipt_text(
-                receipt_text,
-                voided_at=row["voided_at"] or "",
-                reason=row["void_reason"] or "",
-            )
+        receipt_text = _receipt_text_from_transaction_row(row)
         self.detail.delete("1.0", "end")
         self.detail.insert("1.0", receipt_text)
 
@@ -717,6 +918,29 @@ def _operator_label_from_transaction_row(row: sqlite3.Row) -> str:
     if name and initials:
         return f"{name} ({initials})"
     return initials or name or "Unknown"
+
+
+def _operator_label(name: str, initials: str) -> str:
+    name = (name or "").strip()
+    initials = (initials or "").strip()
+    if name and initials:
+        return f"{name} ({initials})"
+    return initials or name or "Unknown"
+
+
+def _receipt_text_from_transaction_row(row: sqlite3.Row) -> str:
+    receipt_text = row["receipt_snapshot_text"]
+    if row["status"] == "voided":
+        receipt_text = mark_voided_receipt_text(
+            receipt_text,
+            voided_at=row["voided_at"] or "",
+            reason=row["void_reason"] or "",
+            approved_by=_operator_label(
+                row["voided_by_operator_name_snapshot"],
+                row["voided_by_operator_initials_snapshot"],
+            ),
+        )
+    return receipt_text
 
 
 class AdminSettingsWindow(tk.Toplevel):

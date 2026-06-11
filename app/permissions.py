@@ -6,12 +6,18 @@ from app.models import Operator
 ADMIN_ROLES = {"manager", "admin"}
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
-    "operator": set(),
+    "operator": {
+        "print_receipt",
+        "export_receipt",
+    },
     "manager": {
         "access_admin_settings",
         "manage_materials",
         "manage_rates",
         "manage_operators",
+        "print_receipt",
+        "export_receipt",
+        "run_feet_closeout",
         "export_audit_log",
         "create_backup",
         "restore_backup",
@@ -27,6 +33,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "manage_materials",
         "manage_rates",
         "manage_operators",
+        "print_receipt",
+        "export_receipt",
+        "run_feet_closeout",
         "export_audit_log",
         "create_backup",
         "restore_backup",

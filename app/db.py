@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from app.models import LineItemInput, MaterialType, Operator, Rate, TransactionInput
 from app.pricing import cents_for_quantity
-from app.receipt import build_receipt_text
+from app.receipt import build_receipt_copies_text
 
 
 DEFAULT_DB_PATH = Path("data/recycling_pos.sqlite3")
@@ -118,6 +118,29 @@ def init_db(conn: sqlite3.Connection) -> None:
             operator_initials TEXT,
             notes TEXT NOT NULL DEFAULT ''
         );
+
+        CREATE TABLE IF NOT EXISTS feet_closeout_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_date TEXT NOT NULL,
+            generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            business_name TEXT NOT NULL DEFAULT '',
+            period_start TEXT NOT NULL DEFAULT '',
+            period_end TEXT NOT NULL DEFAULT '',
+            generated_by_operator_id INTEGER REFERENCES operators(id),
+            generated_by_operator_name_snapshot TEXT NOT NULL DEFAULT '',
+            generated_by_operator_initials_snapshot TEXT NOT NULL DEFAULT '',
+            operator_verified INTEGER NOT NULL DEFAULT 0,
+            expected_cash_cents INTEGER,
+            actual_cash_cents INTEGER,
+            discrepancy_cents INTEGER,
+            discrepancy_notes TEXT NOT NULL DEFAULT '',
+            operator_attestation TEXT NOT NULL DEFAULT '',
+            manager_approval TEXT NOT NULL DEFAULT '',
+            report_snapshot_json TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_feet_closeout_reports_date
+            ON feet_closeout_reports(report_date, generated_at);
 
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1351,6 +1374,7 @@ def create_transaction(
             )
             line_rows.append(
                 {
+                    "material_display_name": material.display_name,
                     "description": description,
                     "quantity": str(quantity),
                     "unit_type": material.unit_type,
@@ -1361,7 +1385,7 @@ def create_transaction(
                 }
             )
 
-        receipt_text = build_receipt_text(
+        receipt_text = build_receipt_copies_text(
             transaction={
                 "id": transaction_id,
                 "created_at": created_at.isoformat(timespec="seconds"),
@@ -1371,6 +1395,7 @@ def create_transaction(
                 "payout_method": payload.payout_method.strip() or "cash",
                 "notes": payload.notes.strip(),
                 "total_cents": total_cents,
+                "status": "active",
             },
             line_items=line_rows,
         )

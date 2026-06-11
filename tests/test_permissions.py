@@ -21,6 +21,9 @@ ADMIN_PERMISSIONS = {
     "manage_materials",
     "manage_rates",
     "manage_operators",
+    "print_receipt",
+    "export_receipt",
+    "run_feet_closeout",
     "export_audit_log",
     "create_backup",
     "restore_backup",
@@ -54,6 +57,9 @@ def test_permission_helper_behavior_for_roles(conn: sqlite3.Connection) -> None:
 
     assert not has_permission(operator, "access_admin_settings")
     assert not has_permission(operator, "create_backup")
+    assert has_permission(operator, "print_receipt")
+    assert has_permission(operator, "export_receipt")
+    assert not has_permission(operator, "run_feet_closeout")
     for permission in ADMIN_PERMISSIONS:
         assert has_permission(manager, permission)
         assert has_permission(admin, permission)
@@ -69,7 +75,7 @@ def test_operator_role_cannot_access_admin_actions(conn: sqlite3.Connection) -> 
     )
     operator = get_operator(conn, operator_id)
 
-    for permission in ADMIN_PERMISSIONS:
+    for permission in ADMIN_PERMISSIONS - {"print_receipt", "export_receipt"}:
         with pytest.raises(PermissionError):
             require_permission(operator, permission)
 

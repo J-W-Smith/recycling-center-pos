@@ -30,6 +30,11 @@
 - Should void reasons use a fixed reason list, free text, or both?
 - How should corrected replacement transactions be linked to the original transaction?
 - Should correction transactions affect the original transaction date or the current business day?
+- Should FEET closeouts be locked to one final run per business date, or should reruns be allowed with audit notes?
+- Who signs the operator attestation and manager approval lines in the real closeout process?
+- Should expected vs actual cash use a denomination-count worksheet instead of one amount?
+- What discrepancy thresholds require escalation or second approval?
+- How long should FEET closeout PDFs/CSVs be retained outside SQLite?
 - Do they need scale integration?
 - What scale model?
 - Do they use a cash drawer?
@@ -38,12 +43,14 @@
 - Do they need ID capture for certain transaction sizes?
 - Do they need CalRecycle processor reports or only internal reports?
 - What receipt printer model?
+- Does the printer support plain-text Windows print-verb output, ESC/POS, USB serial, or a vendor driver?
 - Do they need barcode scanning?
 - Do they need Excel export?
 - Do they need backup/restore?
 - Do they need multi-location support?
 - What exactly must be printed on receipts?
 - What reports are currently submitted or retained?
+- Does FEET closeout replace an internal paper worksheet, supplement it, or only serve as a manager review artifact?
 - What transaction correction process do they follow today?
 - Who is allowed to void or correct a transaction?
 - What data must be visible to the customer on screen before payout?

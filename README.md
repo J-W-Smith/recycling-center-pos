@@ -26,11 +26,14 @@ The demo is static HTML/CSS/JavaScript only. It uses fake sample data and is not
 - CRV and non-CRV line items tracked separately.
 - Count, weight, and manual payout line items.
 - Transaction save flow with receipt snapshot text stored at transaction time.
+- Customer copy and office copy receipt snapshots with FEET audit indicators.
+- Receipt PDF export and Windows OS print-verb handoff for connected/default printers.
 - Controlled manager/admin void workflow instead of deleting transactions.
 - Transaction History window for reviewing receipt snapshots and voiding selected transactions.
-- Printable receipt text and HTML conversion helper.
+- Transaction History receipt print/export actions that preserve void display marks.
 - Daily report grouped by material/report group, with voided transactions separated.
 - CSV export for daily reports.
+- FEET-inspired end-of-day closeout report with CRV/non-CRV totals, material breakdowns, operator totals, void totals, discrepancy notes, attestations, CSV export, PDF export, audit logging, and immutable closeout snapshots.
 - Focused pytest coverage for pricing, admin config, receipts, reports, transactions, and Decimal/cents handling.
 - Focused tests for manager PIN hashing/validation and admin audit logging.
 - Focused tests for audit CSV export and local database backup/restore behavior.
@@ -106,6 +109,25 @@ The original transaction and receipt snapshot remain stored. Viewing a voided re
 
 Full non-destructive correction transactions are still deferred. For the current MVP, managers should void the incorrect transaction with a clear reason and enter a new transaction. The Correction Workflow button is a placeholder to keep this limitation visible.
 
+## Receipts And FEET Closeout
+
+Each saved transaction stores an immutable receipt snapshot. The snapshot includes:
+
+- business name placeholder
+- customer copy and office copy labels
+- transaction ID and date/time
+- operator display name and initials snapshot
+- operator PIN verification status when available
+- material, unit type, quantity, rate, and subtotal lines
+- total payout
+- FEET audit indicators for verification, void marks, and notes/reasons
+
+Use `Print Receipt` to hand the current receipt text to the Windows print queue when a default/connected receipt printer is available. Use `Save/Export Receipt` to export the current receipt as a PDF. Transaction History also supports printing/exporting selected receipt snapshots. Voided transaction display adds a void marker, void timestamp, reason, and approving operator snapshot without rewriting the original receipt snapshot.
+
+Use `Run FEET End-of-Day Closeout` from the main screen with a manager/admin operator selected. The action requires the `run_feet_closeout` permission, manager PIN approval, and optional operator PIN verification when admin-action PIN enforcement is enabled. The report summarizes total transactions, total paid, CRV paid, non-CRV paid, material breakdowns, operator-wise totals, void count and voided amount, expected vs actual cash, discrepancy notes, operator attestation, and manager approval. The closeout is saved as an immutable JSON snapshot and exported to CSV and PDF under `data/exports`.
+
+FEET in this MVP means: preserve an audit trail, capture who took actions, log void/correction reasons, and provide a final closeout snapshot for review. It is a local accountability framework only, not a compliance certification.
+
 ## Backup And Restore
 
 Use `Admin Settings` > `Settings` to create a local SQLite backup. The default filename is `recycling_pos_backup_YYYY-MM-DD_HHMMSS.sqlite3`. Store backups somewhere outside the app working folder when practical, and periodically copy backups off the workstation to removable storage or another controlled location.
@@ -121,6 +143,7 @@ Restore is intentionally cautious. The manager chooses a backup file, sees a war
 - Operator display name and initials are snapshotted on each transaction.
 - Transactions store whether the selected operator was PIN-verified at save time.
 - Voids store the approving operator snapshot, timestamp, and reason.
+- FEET closeouts store final report JSON snapshots and audit entries.
 - Old materials and rates are retained for audit/history instead of hard-deleted.
 - Inactive operators are hidden from new transactions but retained for history.
 - Admin settings are protected by local PIN access control.
@@ -143,10 +166,9 @@ The manager PIN is the main local security gate for admin access. Operator role 
 - Full employee login sessions beyond optional local operator PIN verification.
 - Scale integration.
 - Cash drawer integration.
-- Thermal receipt printer integration.
+- Direct printer integration beyond the Windows OS print verb.
 - Barcode scanning.
 - Customer identity capture.
-- PDF export.
 - Full linked correction/adjustment transaction workflow.
 - CalRecycle processor report submission.
 - Multi-location sync.

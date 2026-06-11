@@ -72,6 +72,31 @@ Immutable receipt/internal copy snapshots.
 - `snapshot_text`
 - `created_at`
 
+Receipt snapshots contain customer and office copies, operator snapshot text, operator verification status when available, material/rate/subtotal lines, total payout, and FEET audit indicators. Voided receipt display is layered on at read/print time so the original snapshot is not mutated.
+
+## `feet_closeout_reports`
+
+Immutable FEET-inspired end-of-day closeout snapshots.
+
+- `report_date`
+- `generated_at`
+- `business_name`
+- `period_start`
+- `period_end`
+- `generated_by_operator_id`
+- `generated_by_operator_name_snapshot`
+- `generated_by_operator_initials_snapshot`
+- `operator_verified`
+- `expected_cash_cents`
+- `actual_cash_cents`
+- `discrepancy_cents`
+- `discrepancy_notes`
+- `operator_attestation`
+- `manager_approval`
+- `report_snapshot_json`
+
+The JSON snapshot stores the rendered closeout totals for audit review. It is not recalculated after the closeout is saved.
+
 ## Optional Placeholders
 
 - `daily_report_runs`
@@ -122,13 +147,15 @@ Append-only admin/config change history.
 - `timestamp`
 - `operator`
 - `action_type`
-- `entity_type`: `material_type`, `rate`, `operator`, or `settings`
+- `entity_type`: `material_type`, `rate`, `operator`, `settings`, `transaction`, or `feet_closeout_report`
 - `entity_id`
 - `before_value`
 - `after_value`
 - `notes`
 
 Logged actions include operator creation/edit/deactivation/reactivation, operator PIN set/change/clear, operator PIN verification attempts when recorded by the UI, operator PIN enforcement setting changes, transaction void attempted/completed/failed events, material creation/edit/deactivation/reactivation, rate creation, rate replacement/end-dating, manager PIN creation/change, audit log export, database backup creation, and database restore attempted/completed/failed events.
+
+FEET closeout completion is logged with the report date, total paid, void count, and selected operator label. The full report snapshot lives in `feet_closeout_reports`.
 
 Operator audit snapshots intentionally expose only `pin_set` and `pin_updated_at`, not `pin_hash`.
 
@@ -140,12 +167,15 @@ Backup files are SQLite database copies. They contain transactions, receipt snap
 - Void/correct by adding status and reason metadata.
 - Require manager/admin approval, manager PIN confirmation, and a reason before voiding.
 - Keep original receipt snapshots unchanged when transactions are voided.
+- Keep original closeout snapshots unchanged after report generation.
+- Verify FEET closeout line totals against stored transaction totals for the report date.
 - Store currency as integer cents.
 - Store weights and quantities as Decimal-compatible text.
 - Store receipt snapshots at transaction time.
 - Store operator display name and initials snapshots at transaction time.
 - Store operator PIN verification status at transaction time when available.
 - Store void approver display name and initials snapshots at void time.
+- Store closeout operator display name and initials snapshots at closeout time.
 - Keep inactive materials and old rates for historical reporting.
 - Keep inactive operators for historical reporting.
 - Prevent deactivating or demoting the last active manager/admin.

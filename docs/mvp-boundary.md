@@ -3,7 +3,7 @@
 ## Included Now
 
 - Python 3.11+ app structure.
-- SQLite schema for materials, rates, transactions, line items, receipt snapshots, daily report runs, and operator placeholders.
+- SQLite schema for materials, rates, transactions, line items, receipt snapshots, daily report runs, FEET closeout snapshots, and operator placeholders.
 - Seed data for common CRV and non-CRV material/input types.
 - Tkinter screen for adding line items and saving a transaction.
 - Tkinter Admin Settings window for material and rate configuration.
@@ -23,10 +23,16 @@
 - Operator snapshots on transactions and receipts.
 - Operator PIN verification snapshot on transactions.
 - Transaction History window for reviewing stored transactions and receipt snapshots.
+- Transaction History receipt print/export actions.
 - Controlled manager/admin transaction void workflow with manager PIN approval.
 - Voided receipt display marker without rewriting the original receipt snapshot.
+- Customer and office receipt copy snapshots with operator verification and FEET audit indicators.
+- Receipt PDF export.
+- Windows OS print-verb receipt handoff when a connected/default printer is available.
 - Daily report operator summary.
 - Daily report void count, voided amount, and separate voided transaction section.
+- FEET-inspired end-of-day closeout report with business/date/period header.
+- FEET closeout CRV/non-CRV totals, material breakdown, operator totals, void totals, discrepancy notes, attestation, approval lines, CSV export, PDF export, audit entry, and saved JSON snapshot.
 - Centralized role/permission helpers for Admin Settings actions.
 - Admin Settings access denied for plain operators.
 - Last active manager/admin deactivation/demotion safeguards.
@@ -35,6 +41,7 @@
 - Text receipt snapshot display.
 - Daily report generation.
 - Daily CSV export.
+- FEET closeout CSV/PDF export.
 - Tests for pricing, admin configuration, receipt snapshots, transaction totals, daily reports, void handling, and cents/Decimal behavior.
 - Tests for manager PIN hashing/validation/change, audit log entries, before/after snapshots, and existing-database migrations.
 - Tests for audit CSV export, database backup copies, restore rejection, pre-restore backup creation, and valid restore replacement.
@@ -47,7 +54,7 @@
 
 - Final California compliance logic.
 - Certified scale integration.
-- Thermal printer support.
+- Dedicated printer-driver integration beyond OS-level print handoff.
 - Cash drawer support.
 - Full employee login/session model.
 - Customer profile or ID capture.
@@ -56,7 +63,6 @@
 - Operator passwords or full employee authentication beyond optional local PIN verification.
 - Fine-grained separation between manager and admin roles.
 - Audit log signing, retention policy automation, or tamper-evidence.
-- PDF exports.
 - Installer packaging.
 - Multi-workstation or multi-location syncing.
 - Cloud backups.
@@ -68,8 +74,10 @@
 - Do not assume the seed CRV settings are production-correct.
 - Do not delete or rewrite transaction records as the normal correction path.
 - Do not void transactions without manager/admin role, manager PIN approval, and a reason.
+- Do not run FEET closeout without manager/admin role and manager PIN approval.
 - Do not hard-delete materials or rates as the default admin action.
 - Do not present local PIN protection as full security or compliance certification.
+- Do not present FEET closeout output as compliance-certified processor reporting.
 - Do not silently restore a database without warning, PIN confirmation, and a pre-restore backup.
 - Do not treat operator selection as secure authentication.
 - Do not treat optional operator PIN verification as enterprise authentication.
