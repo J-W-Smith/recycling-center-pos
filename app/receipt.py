@@ -24,6 +24,7 @@ def build_receipt_text(
     line_items: Sequence[Mapping[str, object]],
     business_name: str = BUSINESS_NAME_PLACEHOLDER,
     copy_label: str = COPY_CUSTOMER,
+    disclosures: Sequence[str] | None = None,
 ) -> str:
     status = str(transaction.get("status", "active")).upper()
     is_voided = status == "VOIDED"
@@ -73,9 +74,14 @@ def build_receipt_text(
             "",
             f"Notes: {transaction.get('notes', '')}",
             "",
-            "Local-first demonstration output. Not compliance certified.",
         ]
     )
+    if disclosures:
+        lines.append("Compliance Pack Disclosures:")
+        for disclosure in disclosures:
+            lines.append(f"  {disclosure}")
+        lines.append("")
+    lines.append("Local-first demonstration output. Not compliance certified.")
     return "\n".join(lines)
 
 
@@ -83,11 +89,16 @@ def build_receipt_copies_text(
     transaction: Mapping[str, object],
     line_items: Sequence[Mapping[str, object]],
     business_name: str = BUSINESS_NAME_PLACEHOLDER,
+    disclosures: Sequence[str] | None = None,
 ) -> str:
     return "\n\n".join(
         [
-            build_receipt_text(transaction, line_items, business_name, COPY_CUSTOMER),
-            build_receipt_text(transaction, line_items, business_name, COPY_OFFICE),
+            build_receipt_text(
+                transaction, line_items, business_name, COPY_CUSTOMER, disclosures
+            ),
+            build_receipt_text(
+                transaction, line_items, business_name, COPY_OFFICE, disclosures
+            ),
         ]
     )
 

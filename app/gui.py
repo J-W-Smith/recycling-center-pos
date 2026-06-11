@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import tkinter as tk
-from datetime import date
+from datetime import date, datetime
 from decimal import InvalidOperation
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -24,11 +24,17 @@ from app.db import (
     has_manager_pin,
     has_active_operator,
     list_audit_entries,
+    list_compliance_packs,
+    list_compliance_rules,
     list_materials,
+    list_material_pack_links,
     list_operators,
     list_transactions,
     list_rates,
     set_bool_setting,
+    set_compliance_pack_enabled,
+    set_compliance_rule_enabled,
+    set_material_pack_link_enabled,
     set_material_active,
     set_operator_active,
     set_operator_pin,
@@ -38,6 +44,12 @@ from app.db import (
     verify_manager_pin,
     verify_operator_pin,
     void_transaction,
+)
+from app.compliance import (
+    blocking_results,
+    format_results_for_display,
+    validate_transaction,
+    warning_results,
 )
 from app.models import LineItemInput, MaterialType, Operator, TransactionInput
 from app.maintenance import (
@@ -490,18 +502,67 @@ class RecyclingPOSApp(tk.Tk):
                     "Verify the selected operator before saving this transaction.",
                 )
                 return
+        created_at = datetime.now()
+        payload = TransactionInput(
+            line_items=self.pending_items,
+            operator_id=operator.id,
+            operator_verified=self.operator_is_verified(operator),
+            payout_method=self.payout_var.get(),
+            notes=self.notes_var.get(),
+        )
+        compliance_results = validate_transaction(self.conn, payload, created_at)
+        blockers = blocking_results(compliance_results)
+        if blockers:
+            messagebox.showerror(
+                "Compliance block",
+                format_results_for_display(blockers),
+            )
+            return
+        warnings = warning_results(compliance_results)
+        if warnings:
+            if not self.require_permission(
+                "override_compliance_warning", "override compliance warnings"
+            ):
+                return
+            if has_manager_pin(self.conn):
+                manager_pin = self.prompt_manager_pin("override compliance warnings")
+                if manager_pin is None:
+                    return
+                if not verify_manager_pin(self.conn, manager_pin):
+                    messagebox.showerror(
+                        "Manager PIN failed",
+                        "Manager PIN approval is required to override compliance warnings.",
+                    )
+                    return
+            reason = simpledialog.askstring(
+                "Compliance Warning Override",
+                "Compliance pack warnings:\n"
+                + format_results_for_display(warnings)
+                + "\n\nEnter the override reason:",
+                parent=self,
+            )
+            if not reason or not reason.strip():
+                messagebox.showerror(
+                    "Override reason required",
+                    "A reason is required to save with compliance warnings.",
+                )
+                return
+            payload = TransactionInput(
+                line_items=self.pending_items,
+                operator_id=operator.id,
+                operator_verified=self.operator_is_verified(operator),
+                payout_method=self.payout_var.get(),
+                notes=self.notes_var.get(),
+                compliance_warning_override_reason=reason,
+                compliance_override_operator_id=operator.id,
+            )
         try:
             tx_id = create_transaction(
                 self.conn,
-                TransactionInput(
-                    line_items=self.pending_items,
-                    operator_id=operator.id,
-                    operator_verified=self.operator_is_verified(operator),
-                    payout_method=self.payout_var.get(),
-                    notes=self.notes_var.get(),
-                ),
+                payload,
+                created_at=created_at,
             )
-        except ValueError as exc:
+        except (PermissionError, ValueError) as exc:
             messagebox.showerror("Transaction validation", str(exc))
             return
         tx = fetch_transaction(self.conn, tx_id)
@@ -943,6 +1004,27 @@ def _receipt_text_from_transaction_row(row: sqlite3.Row) -> str:
     return receipt_text
 
 
+def _rule_config_summary(config: dict[str, object]) -> str:
+    summary_parts = []
+    for key in (
+        "limit_quantity",
+        "refund_cents",
+        "report_grouping",
+        "unit_type",
+        "text",
+        "message",
+    ):
+        value = config.get(key)
+        if value not in (None, "", []):
+            text = str(value)
+            if len(text) > 70:
+                text = text[:67] + "..."
+            summary_parts.append(f"{key}={text}")
+    if not summary_parts and config:
+        summary_parts.append(", ".join(sorted(str(key) for key in config.keys())))
+    return "; ".join(summary_parts)
+
+
 class AdminSettingsWindow(tk.Toplevel):
     def __init__(self, app: RecyclingPOSApp, conn: sqlite3.Connection) -> None:
         super().__init__(app)
@@ -954,11 +1036,15 @@ class AdminSettingsWindow(tk.Toplevel):
         self.selected_material_id: int | None = None
         self.selected_rate_id: int | None = None
         self.selected_operator_id: int | None = None
+        self.selected_compliance_pack_id: int | None = None
+        self.selected_compliance_rule_id: int | None = None
+        self.selected_material_pack_link_id: int | None = None
         self.material_rate_labels: dict[str, MaterialType] = {}
         self._build()
         self.refresh_materials()
         self.refresh_rates()
         self.refresh_operators()
+        self.refresh_compliance_packs()
         self.refresh_audit_log()
 
     def _build(self) -> None:
@@ -966,16 +1052,19 @@ class AdminSettingsWindow(tk.Toplevel):
         tabs.pack(fill="both", expand=True, padx=8, pady=8)
         self.material_tab = ttk.Frame(tabs, padding=8)
         self.rate_tab = ttk.Frame(tabs, padding=8)
+        self.compliance_tab = ttk.Frame(tabs, padding=8)
         self.operator_tab = ttk.Frame(tabs, padding=8)
         self.audit_tab = ttk.Frame(tabs, padding=8)
         self.settings_tab = ttk.Frame(tabs, padding=8)
         tabs.add(self.material_tab, text="Materials")
         tabs.add(self.rate_tab, text="Rates")
+        tabs.add(self.compliance_tab, text="Compliance Packs")
         tabs.add(self.operator_tab, text="Operators")
         tabs.add(self.audit_tab, text="Audit Log")
         tabs.add(self.settings_tab, text="Settings")
         self._build_material_tab()
         self._build_rate_tab()
+        self._build_compliance_tab()
         self._build_operator_tab()
         self._build_audit_tab()
         self._build_settings_tab()
@@ -1124,6 +1213,108 @@ class AdminSettingsWindow(tk.Toplevel):
         ttk.Button(buttons, text="Update Metadata", command=self.save_rate_metadata).pack(
             side="left", padx=(8, 0)
         )
+
+    def _build_compliance_tab(self) -> None:
+        top = ttk.Frame(self.compliance_tab)
+        top.pack(fill="both", expand=True)
+        self.compliance_pack_tree = ttk.Treeview(
+            top,
+            columns=("id", "name", "jurisdiction", "version", "enabled", "built_in"),
+            show="headings",
+            height=7,
+        )
+        headings = (
+            ("id", "ID", 45),
+            ("name", "Pack", 250),
+            ("jurisdiction", "Jurisdiction", 110),
+            ("version", "Version", 120),
+            ("enabled", "Enabled", 75),
+            ("built_in", "Built-in", 75),
+        )
+        for col, label, width in headings:
+            self.compliance_pack_tree.heading(col, text=label)
+            self.compliance_pack_tree.column(col, width=width, anchor="w")
+        self.compliance_pack_tree.pack(fill="x", pady=(0, 8))
+        self.compliance_pack_tree.bind("<<TreeviewSelect>>", self.on_compliance_pack_select)
+
+        pack_buttons = ttk.Frame(self.compliance_tab)
+        pack_buttons.pack(fill="x", pady=(0, 8))
+        ttk.Button(
+            pack_buttons,
+            text="Enable/Disable Selected Pack",
+            command=self.toggle_selected_compliance_pack,
+        ).pack(side="left")
+
+        ttk.Label(
+            self.compliance_tab,
+            text="Rules in selected pack",
+            style="Header.TLabel",
+        ).pack(anchor="w")
+        self.compliance_rule_tree = ttk.Treeview(
+            self.compliance_tab,
+            columns=("id", "name", "type", "severity", "enabled", "dates", "summary"),
+            show="headings",
+            height=8,
+        )
+        rule_headings = (
+            ("id", "ID", 45),
+            ("name", "Rule", 230),
+            ("type", "Type", 130),
+            ("severity", "Severity", 80),
+            ("enabled", "Enabled", 75),
+            ("dates", "Effective Dates", 150),
+            ("summary", "Config Summary", 260),
+        )
+        for col, label, width in rule_headings:
+            self.compliance_rule_tree.heading(col, text=label)
+            self.compliance_rule_tree.column(col, width=width, anchor="w")
+        self.compliance_rule_tree.pack(fill="x", pady=(0, 8))
+        self.compliance_rule_tree.bind("<<TreeviewSelect>>", self.on_compliance_rule_select)
+
+        rule_buttons = ttk.Frame(self.compliance_tab)
+        rule_buttons.pack(fill="x", pady=(0, 8))
+        ttk.Button(
+            rule_buttons,
+            text="Enable/Disable Selected Rule",
+            command=self.toggle_selected_compliance_rule,
+        ).pack(side="left")
+
+        ttk.Label(
+            self.compliance_tab,
+            text="This center uses these linked materials/rules",
+            style="Header.TLabel",
+        ).pack(anchor="w")
+        self.material_pack_link_tree = ttk.Treeview(
+            self.compliance_tab,
+            columns=("id", "material", "unit", "group", "enabled", "required"),
+            show="headings",
+            height=7,
+        )
+        link_headings = (
+            ("id", "ID", 45),
+            ("material", "Material", 280),
+            ("unit", "Unit", 75),
+            ("group", "Report Group", 150),
+            ("enabled", "Selected", 75),
+            ("required", "Required", 75),
+        )
+        for col, label, width in link_headings:
+            self.material_pack_link_tree.heading(col, text=label)
+            self.material_pack_link_tree.column(col, width=width, anchor="w")
+        self.material_pack_link_tree.pack(fill="x", pady=(0, 8))
+        self.material_pack_link_tree.bind("<<TreeviewSelect>>", self.on_material_pack_link_select)
+        ttk.Button(
+            self.compliance_tab,
+            text="Select/Deselect Linked Material",
+            command=self.toggle_selected_material_pack_link,
+        ).pack(anchor="w")
+        ttk.Label(
+            self.compliance_tab,
+            text=(
+                "Built-in packs/rules cannot be deleted here. Disable a pack or rule, "
+                "or deselect a linked material to hide it from new transactions."
+            ),
+        ).pack(anchor="w", pady=(8, 0))
 
     def _build_operator_tab(self) -> None:
         self.operator_tree = ttk.Treeview(
@@ -1312,6 +1503,162 @@ class AdminSettingsWindow(tk.Toplevel):
             self.settings_tab,
             text="Restore replaces the local database and creates a pre-restore backup first.",
         ).pack(anchor="w", pady=(12, 0))
+
+    def refresh_compliance_packs(self) -> None:
+        for item in self.compliance_pack_tree.get_children():
+            self.compliance_pack_tree.delete(item)
+        for pack in list_compliance_packs(self.conn):
+            self.compliance_pack_tree.insert(
+                "",
+                "end",
+                iid=str(pack.id),
+                values=(
+                    pack.id,
+                    pack.display_name,
+                    pack.jurisdiction,
+                    pack.version,
+                    "yes" if pack.enabled else "no",
+                    "yes" if pack.built_in else "no",
+                ),
+            )
+        if self.selected_compliance_pack_id is None:
+            packs = list_compliance_packs(self.conn)
+            if packs:
+                self.selected_compliance_pack_id = packs[0].id
+        self.refresh_compliance_rules()
+        self.refresh_material_pack_links()
+
+    def refresh_compliance_rules(self) -> None:
+        for item in self.compliance_rule_tree.get_children():
+            self.compliance_rule_tree.delete(item)
+        if self.selected_compliance_pack_id is None:
+            return
+        for rule in list_compliance_rules(self.conn, self.selected_compliance_pack_id):
+            dates = rule.effective_start_date
+            if rule.effective_end_date:
+                dates += f" to {rule.effective_end_date}"
+            self.compliance_rule_tree.insert(
+                "",
+                "end",
+                iid=str(rule.id),
+                values=(
+                    rule.id,
+                    rule.display_name,
+                    rule.rule_type,
+                    rule.severity,
+                    "yes" if rule.enabled else "no",
+                    dates,
+                    _rule_config_summary(rule.config),
+                ),
+            )
+
+    def refresh_material_pack_links(self) -> None:
+        for item in self.material_pack_link_tree.get_children():
+            self.material_pack_link_tree.delete(item)
+        if self.selected_compliance_pack_id is None:
+            return
+        for row in list_material_pack_links(self.conn, self.selected_compliance_pack_id):
+            self.material_pack_link_tree.insert(
+                "",
+                "end",
+                iid=str(row["id"]),
+                values=(
+                    row["id"],
+                    row["material_display_name"],
+                    row["unit_type"],
+                    row["report_grouping"],
+                    "yes" if row["enabled"] else "no",
+                    "yes" if row["required"] else "no",
+                ),
+            )
+
+    def on_compliance_pack_select(self, _event: tk.Event) -> None:
+        selected = self.compliance_pack_tree.selection()
+        if not selected:
+            return
+        self.selected_compliance_pack_id = int(selected[0])
+        self.selected_compliance_rule_id = None
+        self.selected_material_pack_link_id = None
+        self.refresh_compliance_rules()
+        self.refresh_material_pack_links()
+
+    def on_compliance_rule_select(self, _event: tk.Event) -> None:
+        selected = self.compliance_rule_tree.selection()
+        self.selected_compliance_rule_id = int(selected[0]) if selected else None
+
+    def on_material_pack_link_select(self, _event: tk.Event) -> None:
+        selected = self.material_pack_link_tree.selection()
+        self.selected_material_pack_link_id = int(selected[0]) if selected else None
+
+    def toggle_selected_compliance_pack(self) -> None:
+        if not self.app.require_admin_action(
+            "manage_compliance_packs", "manage compliance packs"
+        ):
+            return
+        if self.selected_compliance_pack_id is None:
+            messagebox.showerror("No pack selected", "Select a compliance pack first.")
+            return
+        pack = next(
+            item
+            for item in list_compliance_packs(self.conn)
+            if item.id == self.selected_compliance_pack_id
+        )
+        set_compliance_pack_enabled(
+            self.conn,
+            pack.id,
+            not pack.enabled,
+            operator=self.app.current_operator_audit_label(),
+        )
+        self.refresh_compliance_packs()
+        self.refresh_audit_log()
+        self.app.refresh_material_choices()
+
+    def toggle_selected_compliance_rule(self) -> None:
+        if not self.app.require_admin_action(
+            "manage_compliance_packs", "manage compliance rules"
+        ):
+            return
+        if self.selected_compliance_rule_id is None:
+            messagebox.showerror("No rule selected", "Select a compliance rule first.")
+            return
+        rule = next(
+            item
+            for item in list_compliance_rules(self.conn, self.selected_compliance_pack_id)
+            if item.id == self.selected_compliance_rule_id
+        )
+        set_compliance_rule_enabled(
+            self.conn,
+            rule.id,
+            not rule.enabled,
+            operator=self.app.current_operator_audit_label(),
+        )
+        self.refresh_compliance_rules()
+        self.refresh_audit_log()
+
+    def toggle_selected_material_pack_link(self) -> None:
+        if not self.app.require_admin_action(
+            "manage_compliance_packs", "manage compliance material selection"
+        ):
+            return
+        if self.selected_material_pack_link_id is None:
+            messagebox.showerror(
+                "No linked material selected", "Select a linked material first."
+            )
+            return
+        row = next(
+            item
+            for item in list_material_pack_links(self.conn, self.selected_compliance_pack_id)
+            if int(item["id"]) == self.selected_material_pack_link_id
+        )
+        set_material_pack_link_enabled(
+            self.conn,
+            self.selected_material_pack_link_id,
+            not bool(row["enabled"]),
+            operator=self.app.current_operator_audit_label(),
+        )
+        self.refresh_material_pack_links()
+        self.refresh_materials()
+        self.refresh_audit_log()
 
     def refresh_materials(self) -> None:
         for item in self.material_tree.get_children():

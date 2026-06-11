@@ -14,6 +14,8 @@ The demo is static HTML/CSS/JavaScript only. It uses fake sample data and is not
 
 - SQLite local storage.
 - Configurable material/input types and effective-dated rates.
+- Modular Compliance Packs for configurable material, rule, warning, disclosure, and report support.
+- Built-in California CRV Compliance Pack seed data.
 - Admin Settings window for adding/editing materials and rates without code changes.
 - Manager PIN protection for Admin Settings.
 - Read-only admin audit log for material, rate, and settings changes.
@@ -26,7 +28,9 @@ The demo is static HTML/CSS/JavaScript only. It uses fake sample data and is not
 - CRV and non-CRV line items tracked separately.
 - Count, weight, and manual payout line items.
 - Transaction save flow with receipt snapshot text stored at transaction time.
+- Dynamic compliance-pack validation before transaction save.
 - Customer copy and office copy receipt snapshots with FEET audit indicators.
+- Receipt and report disclosures from enabled compliance packs.
 - Receipt PDF export and Windows OS print-verb handoff for connected/default printers.
 - Controlled manager/admin void workflow instead of deleting transactions.
 - Transaction History window for reviewing receipt snapshots and voiding selected transactions.
@@ -40,6 +44,7 @@ The demo is static HTML/CSS/JavaScript only. It uses fake sample data and is not
 - Focused tests for operator identity, snapshots, reports, and audit attribution.
 - Focused tests for optional operator PIN hashing, enforcement, audit entries, and migrations.
 - Focused tests for controlled transaction void permissions, audit logging, reports, and receipt display.
+- Focused tests for compliance-pack migrations, seed idempotency, rule toggles, validation warnings/blocks, receipt/report disclosures, and public demo safety.
 
 ## Quickstart
 
@@ -94,6 +99,24 @@ Operator PIN set/change/clear events and operator PIN enforcement setting change
 
 Use `Export CSV` in the Audit Log tab to save the currently filtered audit view. The default filename is `audit_log_YYYY-MM-DD_HHMMSS.csv`.
 
+## Compliance Packs
+
+Compliance Packs are configurable rule packs for material availability, warnings, blocking validations, receipt disclosures, and report sections. They let the app support different recycling center operations without hardcoding one shop's rules into transaction logic.
+
+The first built-in pack is the `California CRV Compliance Pack`. It seeds configurable support rules for:
+
+- count refund values of 5, 10, and 25 cents for configured CRV container classes
+- CRV daily load limit warnings for aluminum, plastic, glass, bag-in-box, multilayer pouches, and paperboard cartons
+- per-material count-payment request warnings
+- CRV recordkeeping checks
+- receipt and daily-report disclosure text
+
+Open `Admin Settings` > `Compliance Packs` to view available packs, enable/disable a pack, enable/disable individual rules, and select/deselect linked materials for this center. Deselecting a linked material hides it from new transaction input while preserving existing transaction history.
+
+Before saving a transaction, the app evaluates enabled rules. `warning` results are shown to the operator and can be overridden by a manager/admin with a reason. `block` results prevent saving. Saved transactions keep rule-check results in `transaction_rule_results`; overrides are audit logged. Receipts preserve the enabled disclosure text used at save time, and daily reports include a compliance-pack section.
+
+Compliance Packs provide compliance support and audit-friendly controls only. They are not compliance certification, official filing exports, or a replacement for current CalRecycle, legal, accounting, and business-specific review.
+
 ## Transaction Voids And Corrections
 
 Transactions are not deleted or destructively edited after completion. If a completed transaction is wrong, a manager/admin should use `Transaction History`, select the transaction, and choose `Void Selected`.
@@ -144,6 +167,8 @@ Restore is intentionally cautious. The manager chooses a backup file, sees a war
 - Transactions store whether the selected operator was PIN-verified at save time.
 - Voids store the approving operator snapshot, timestamp, and reason.
 - FEET closeouts store final report JSON snapshots and audit entries.
+- Compliance packs, rules, material links, transaction rule results, and disclosures are stored locally in SQLite.
+- Built-in compliance packs and rules are disabled rather than hard-deleted through the MVP UI.
 - Old materials and rates are retained for audit/history instead of hard-deleted.
 - Inactive operators are hidden from new transactions but retained for history.
 - Admin settings are protected by local PIN access control.
@@ -155,8 +180,7 @@ Restore is intentionally cautious. The manager chooses a backup file, sees a war
 
 This repository is not a compliance-certified system. California CRV rules, certified recycling center recordkeeping, processor reporting, customer ID requirements, load limits, signage, payment rules, and business-specific certification obligations must be reviewed against current CalRecycle guidance and legal/accounting advice before production use.
 
-The initial CRV assumptions are planning placeholders only.
-The admin screen makes CRV values configurable, but it does not replace compliance review.
+The initial CRV assumptions are planning placeholders only. The California CRV Compliance Pack makes CRV values, warnings, load limits, and disclosures configurable, but it does not replace compliance review.
 
 The manager PIN is the main local security gate for admin access. Operator role selection controls which actions are available. Optional individual operator PIN verification improves accountability but still does not replace OS account security, backups, disk encryption, production employee authentication, or production audit controls. Restoring an old backup can roll back operational records, so restore should be manager-only and documented in operating procedures.
 

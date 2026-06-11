@@ -33,6 +33,8 @@ ADMIN_PERMISSIONS = {
     "correct_transaction",
     "view_voided_transactions",
     "approve_transaction_adjustment",
+    "manage_compliance_packs",
+    "override_compliance_warning",
 }
 
 

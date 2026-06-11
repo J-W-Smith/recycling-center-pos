@@ -12,6 +12,26 @@ const lineItems = [
   { material: materials[3], quantity: 42 },
 ];
 
+const compliancePack = {
+  name: "California CRV Compliance Pack",
+  enabled: true,
+  rules: [
+    { name: "CRV refund values by count", status: "Enabled", severity: "Info" },
+    { name: "Daily load limits", status: "Enabled", severity: "Warning" },
+    { name: "Count-payment request limits", status: "Enabled", severity: "Warning" },
+    { name: "Recordkeeping requirement", status: "Enabled", severity: "Block" },
+    { name: "Receipt/report disclosures", status: "Enabled", severity: "Info" },
+  ],
+  materials: [
+    "Aluminum CRV by Weight",
+    "Plastic CRV by Weight",
+    "Glass CRV by Weight",
+    "Aluminum CRV by Count",
+    "Plastic CRV by Count",
+    "Large CRV Container by Count",
+  ],
+};
+
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
@@ -76,6 +96,26 @@ function showStaticSaveNotice() {
   }, 1400);
 }
 
+function renderCompliancePack() {
+  const rulesBody = document.querySelector("#compliance-rules");
+  const materialList = document.querySelector("#compliance-materials");
+  if (!rulesBody || !materialList) {
+    return;
+  }
+  rulesBody.innerHTML = compliancePack.rules
+    .map(
+      (rule) => `<tr>
+        <td>${rule.name}</td>
+        <td><span class="status good">${rule.status}</span></td>
+        <td>${rule.severity}</td>
+      </tr>`,
+    )
+    .join("");
+  materialList.innerHTML = compliancePack.materials
+    .map((material) => `<li>${material}</li>`)
+    .join("");
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".tab").forEach((button) => {
     button.addEventListener("click", () => activateTab(button.dataset.target));
@@ -97,4 +137,5 @@ document.addEventListener("DOMContentLoaded", () => {
 
   refreshMaterialFields();
   renderLineItems();
+  renderCompliancePack();
 });

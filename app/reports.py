@@ -13,6 +13,7 @@ from app.pdf import write_text_pdf
 from app.permissions import has_permission
 from app.pricing import format_cents
 from app.receipt import BUSINESS_NAME_PLACEHOLDER
+from app.compliance import daily_report_compliance_summary, transaction_rule_result_summary
 
 
 def generate_daily_report(conn: sqlite3.Connection, report_date: date | str) -> dict[str, Any]:
@@ -169,6 +170,8 @@ def generate_daily_report(conn: sqlite3.Connection, report_date: date | str) -> 
         "voided_transactions": voided_list,
         "void_count": len(voided_list),
         "voided_total_cents": voided_total_cents,
+        "compliance": daily_report_compliance_summary(conn, day),
+        "compliance_rule_results": transaction_rule_result_summary(conn, day),
     }
 
 
@@ -374,6 +377,7 @@ def export_daily_report_csv(report: dict[str, Any], output_path: str | Path) -> 
                     format_cents(voided["line_total_cents"]),
                 ]
             )
+        _write_compliance_csv_section(writer, report)
     return path
 
 
@@ -437,10 +441,49 @@ def export_feet_closeout_csv(report: dict[str, Any], output_path: str | Path) ->
                 ]
             )
         writer.writerow([])
+        _write_compliance_csv_section(writer, report)
+        writer.writerow([])
         writer.writerow(["Operator Attestation", report["operator_attestation"]])
         writer.writerow(["Manager Approval", report["manager_approval"]])
         writer.writerow(["Disclaimer", report["disclaimer"]])
     return path
+
+
+def _write_compliance_csv_section(writer: csv.writer, report: dict[str, Any]) -> None:
+    compliance = report.get("compliance", {})
+    packs = compliance.get("enabled_packs", [])
+    if not packs:
+        return
+    writer.writerow([])
+    writer.writerow(["Compliance Packs"])
+    for pack in packs:
+        writer.writerow(
+            [
+                "Enabled Pack",
+                pack["display_name"],
+                pack["jurisdiction"],
+                pack["version"],
+            ]
+        )
+        for disclosure in pack.get("report_disclosures", []):
+            writer.writerow(["Disclosure", disclosure])
+        writer.writerow(["Daily Load Limits"])
+        writer.writerow(["Rule", "Grouping", "Actual", "Limit", "Unit", "Severity"])
+        for limit in pack.get("daily_load_limits", []):
+            writer.writerow(
+                [
+                    limit["display_name"],
+                    limit["report_grouping"],
+                    limit["actual_quantity"],
+                    limit["limit_quantity"],
+                    limit["unit_label"] or limit["unit_type"],
+                    limit["severity"],
+                ]
+            )
+    if report.get("compliance_rule_results"):
+        writer.writerow(["Rule Result Summary"])
+        for result, count in sorted(report["compliance_rule_results"].items()):
+            writer.writerow([result, count])
 
 
 def render_daily_report_html(report: dict[str, Any]) -> str:
@@ -473,6 +516,7 @@ def render_daily_report_html(report: dict[str, Any]) -> str:
         "</tr>"
         for item in report["operator_summaries"]
     )
+    compliance_html = _render_compliance_html(report)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -516,10 +560,59 @@ def render_daily_report_html(report: dict[str, Any]) -> str:
     </thead>
     <tbody>{voided_rows}</tbody>
   </table>
+  {compliance_html}
   <p>PDF export and certified processor reporting are future extension points.</p>
 </body>
 </html>
 """
+
+
+def _render_compliance_html(report: dict[str, Any]) -> str:
+    packs = report.get("compliance", {}).get("enabled_packs", [])
+    if not packs:
+        return ""
+    sections = ["<h2>Compliance Pack Support</h2>"]
+    for pack in packs:
+        limit_rows = "\n".join(
+            "<tr>"
+            f"<td>{escape(limit['display_name'])}</td>"
+            f"<td>{escape(limit['report_grouping'])}</td>"
+            f"<td>{escape(limit['actual_quantity'])}</td>"
+            f"<td>{escape(limit['limit_quantity'])}</td>"
+            f"<td>{escape(limit['unit_label'] or limit['unit_type'])}</td>"
+            f"<td>{escape(limit['severity'])}</td>"
+            "</tr>"
+            for limit in pack.get("daily_load_limits", [])
+        )
+        disclosures = "".join(
+            f"<li>{escape(text)}</li>" for text in pack.get("report_disclosures", [])
+        )
+        recordkeeping = "".join(
+            f"<li>{escape(text)}</li>"
+            for text in pack.get("recordkeeping_requirements", [])
+        )
+        sections.append(
+            f"""
+  <h3>{escape(pack['display_name'])} {escape(pack['version'])}</h3>
+  <p>Jurisdiction: {escape(pack['jurisdiction'])}<br>
+  {escape(pack['disclaimer'])}</p>
+  <ul>{disclosures}{recordkeeping}</ul>
+  <table>
+    <thead><tr><th>Rule</th><th>Grouping</th><th>Actual</th><th>Limit</th><th>Unit</th><th>Severity</th></tr></thead>
+    <tbody>{limit_rows}</tbody>
+  </table>
+"""
+        )
+    if report.get("compliance_rule_results"):
+        items = "".join(
+            f"<li>{escape(result)}: {count}</li>"
+            for result, count in sorted(report["compliance_rule_results"].items())
+        )
+        sections.append(f"<h3>Rule Result Summary</h3><ul>{items}</ul>")
+    sections.append(
+        "<p>Not compliance-certified. Final CRV rules must be verified before production use.</p>"
+    )
+    return "\n".join(sections)
 
 
 def render_feet_closeout_html(report: dict[str, Any]) -> str:
@@ -586,6 +679,28 @@ def feet_closeout_report_to_text(report: dict[str, Any]) -> str:
             f"- {voided['transaction_id']}: {format_cents(voided['line_total_cents'])}, "
             f"approved by {voided['approved_by']}, reason: {voided['reason']}"
         )
+    packs = report.get("compliance", {}).get("enabled_packs", [])
+    if packs:
+        lines.extend(["", "Compliance Pack Support"])
+        for pack in packs:
+            lines.append(
+                f"- {pack['display_name']} {pack['version']} ({pack['jurisdiction']})"
+            )
+            for disclosure in pack.get("report_disclosures", []):
+                lines.append(f"  Disclosure: {disclosure}")
+            for limit in pack.get("daily_load_limits", []):
+                lines.append(
+                    f"  {limit['display_name']}: actual {limit['actual_quantity']} "
+                    f"/ limit {limit['limit_quantity']} "
+                    f"{limit['unit_label'] or limit['unit_type']}"
+                )
+        if report.get("compliance_rule_results"):
+            summary = ", ".join(
+                f"{result}={count}"
+                for result, count in sorted(report["compliance_rule_results"].items())
+            )
+            lines.append(f"  Rule results: {summary}")
+        lines.append("  Not compliance-certified. Final CRV rules require review.")
     lines.extend(
         [
             "",

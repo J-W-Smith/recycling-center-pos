@@ -278,6 +278,17 @@ button:active,
   border: 1px solid var(--chrome-dark);
 }
 
+.check-list {
+  display: grid;
+  gap: 7px;
+  padding-left: 18px;
+  margin: 0;
+}
+
+.check-list li {
+  padding: 4px 0;
+}
+
 .classic-form {
   display: grid;
   gap: 10px;

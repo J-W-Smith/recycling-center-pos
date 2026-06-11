@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 
 UnitType = Literal["weight", "count", "manual"]
@@ -66,3 +66,36 @@ class TransactionInput:
     operator_verified: bool = False
     payout_method: str = "cash"
     notes: str = ""
+    compliance_warning_override_reason: str = ""
+    compliance_override_operator_id: int | None = None
+
+
+@dataclass(frozen=True)
+class CompliancePack:
+    id: int
+    pack_key: str
+    display_name: str
+    jurisdiction: str
+    version: str
+    description: str
+    source_notes: str
+    enabled: bool
+    built_in: bool
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass(frozen=True)
+class ComplianceRule:
+    id: int
+    pack_id: int
+    rule_key: str
+    display_name: str
+    rule_type: str
+    severity: str
+    config: dict[str, Any]
+    enabled: bool
+    effective_start_date: str
+    effective_end_date: str | None = None
+    created_at: str = ""
+    updated_at: str = ""

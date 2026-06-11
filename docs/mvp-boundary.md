@@ -3,10 +3,11 @@
 ## Included Now
 
 - Python 3.11+ app structure.
-- SQLite schema for materials, rates, transactions, line items, receipt snapshots, daily report runs, FEET closeout snapshots, and operator placeholders.
+- SQLite schema for materials, rates, transactions, line items, receipt snapshots, daily report runs, FEET closeout snapshots, compliance packs/rules, transaction rule results, and operator placeholders.
 - Seed data for common CRV and non-CRV material/input types.
 - Tkinter screen for adding line items and saving a transaction.
 - Tkinter Admin Settings window for material and rate configuration.
+- Tkinter Admin Settings Compliance Packs tab for viewing/toggling packs, rules, and pack-linked material selection.
 - Manager PIN prompt before opening Admin Settings.
 - Local salted-hash manager PIN storage and PIN change screen.
 - Read-only Audit Log tab for admin/config changes.
@@ -31,8 +32,14 @@
 - Windows OS print-verb receipt handoff when a connected/default printer is available.
 - Daily report operator summary.
 - Daily report void count, voided amount, and separate voided transaction section.
+- Daily report compliance-pack section with enabled packs, configured daily load limits, actual quantities, disclosures, and rule result counts.
 - FEET-inspired end-of-day closeout report with business/date/period header.
 - FEET closeout CRV/non-CRV totals, material breakdown, operator totals, void totals, discrepancy notes, attestation, approval lines, CSV export, PDF export, audit entry, and saved JSON snapshot.
+- FEET closeout snapshots include enabled compliance-pack support sections when packs are active.
+- California CRV Compliance Pack seed data with configurable refund-value, daily-load, count-payment, recordkeeping, receipt disclosure, and report disclosure rules.
+- Transaction validation layer that returns passed/warning/blocked compliance rule results.
+- Warning override audit entries for manager/admin compliance warning overrides.
+- Material pack links that can hide linked materials from new transactions without rewriting history.
 - Centralized role/permission helpers for Admin Settings actions.
 - Admin Settings access denied for plain operators.
 - Last active manager/admin deactivation/demotion safeguards.
@@ -49,10 +56,15 @@
 - Tests for operator/manager/admin permissions, admin denial audit entries, backup/restore/audit-export permissions, and last manager/admin safeguards.
 - Tests for optional operator PIN hashing, validation, reset/clear audit logs, enforcement settings, transaction enforcement, and migrations.
 - Tests for controlled transaction void permissions, reason requirements, audit entries, report totals, receipt display, and migrations.
+- Tests for compliance-pack tables, California CRV seed idempotency, pack/rule toggles, material-link selection, daily-load and count-payment warnings, block behavior, warning override audit logging, receipt/report disclosures, disabled-pack behavior, and public demo safety.
 
 ## Deferred
 
-- Final California compliance logic.
+- Final California compliance certification/legal review.
+- Official filing/export formats for CalRecycle or processors.
+- Customer-specific daily limit enforcement beyond the configured site-day warning support.
+- Full custom compliance-pack authoring UI.
+- Advanced rule editor for arbitrary JSON configs.
 - Certified scale integration.
 - Dedicated printer-driver integration beyond OS-level print handoff.
 - Cash drawer support.
@@ -72,6 +84,7 @@
 - Do not build a full ERP.
 - Do not hardcode production rates into business logic.
 - Do not assume the seed CRV settings are production-correct.
+- Do not present Compliance Packs as legal advice, certification, or official reporting.
 - Do not delete or rewrite transaction records as the normal correction path.
 - Do not void transactions without manager/admin role, manager PIN approval, and a reason.
 - Do not run FEET closeout without manager/admin role and manager PIN approval.
@@ -82,3 +95,4 @@
 - Do not treat operator selection as secure authentication.
 - Do not treat optional operator PIN verification as enterprise authentication.
 - Do not allow deactivating or demoting the last active manager/admin.
+- Do not hard-delete built-in compliance packs or rules as the normal admin path.

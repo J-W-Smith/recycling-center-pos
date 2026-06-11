@@ -27,6 +27,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "correct_transaction",
         "view_voided_transactions",
         "approve_transaction_adjustment",
+        "manage_compliance_packs",
+        "override_compliance_warning",
     },
     "admin": {
         "access_admin_settings",
@@ -45,6 +47,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "correct_transaction",
         "view_voided_transactions",
         "approve_transaction_adjustment",
+        "manage_compliance_packs",
+        "override_compliance_warning",
     },
 }
 

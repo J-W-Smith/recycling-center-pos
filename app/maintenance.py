@@ -16,6 +16,10 @@ EXPECTED_DATABASE_TABLES = {
     "rates",
     "app_settings",
     "audit_log",
+    "compliance_packs",
+    "compliance_rules",
+    "material_pack_links",
+    "transaction_rule_results",
 }
 
 

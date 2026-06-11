@@ -11,7 +11,15 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
-from app.models import LineItemInput, MaterialType, Operator, Rate, TransactionInput
+from app.models import (
+    CompliancePack,
+    ComplianceRule,
+    LineItemInput,
+    MaterialType,
+    Operator,
+    Rate,
+    TransactionInput,
+)
 from app.pricing import cents_for_quantity
 from app.receipt import build_receipt_copies_text
 
@@ -187,6 +195,85 @@ def init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_audit_log_entity
             ON audit_log(entity_type, entity_id);
+
+        CREATE TABLE IF NOT EXISTS compliance_packs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pack_key TEXT NOT NULL UNIQUE,
+            display_name TEXT NOT NULL,
+            jurisdiction TEXT NOT NULL DEFAULT '',
+            version TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            source_notes TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 0,
+            built_in INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS compliance_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pack_id INTEGER NOT NULL REFERENCES compliance_packs(id),
+            rule_key TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            rule_type TEXT NOT NULL CHECK (
+                rule_type IN (
+                    'material_enablement',
+                    'payout_value',
+                    'daily_load_limit',
+                    'count_payment_limit',
+                    'receipt_disclosure',
+                    'report_requirement',
+                    'warning',
+                    'blocking_validation',
+                    'audit_requirement'
+                )
+            ),
+            severity TEXT NOT NULL DEFAULT 'info'
+                CHECK (severity IN ('info', 'warning', 'block')),
+            config_json TEXT NOT NULL DEFAULT '{}',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            effective_start_date TEXT NOT NULL DEFAULT '2026-01-01',
+            effective_end_date TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(pack_id, rule_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_compliance_rules_pack
+            ON compliance_rules(pack_id, rule_type, enabled);
+
+        CREATE TABLE IF NOT EXISTS material_pack_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pack_id INTEGER NOT NULL REFERENCES compliance_packs(id),
+            material_type_id INTEGER NOT NULL REFERENCES material_types(id),
+            required INTEGER NOT NULL DEFAULT 0,
+            enabled_by_default INTEGER NOT NULL DEFAULT 1,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(pack_id, material_type_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_material_pack_links_pack
+            ON material_pack_links(pack_id, enabled);
+
+        CREATE TABLE IF NOT EXISTS transaction_rule_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_id TEXT NOT NULL REFERENCES transactions(id),
+            pack_key TEXT NOT NULL,
+            rule_key TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            result TEXT NOT NULL CHECK (
+                result IN ('passed', 'warning', 'blocked', 'skipped')
+            ),
+            message TEXT NOT NULL DEFAULT '',
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_transaction_rule_results_transaction
+            ON transaction_rule_results(transaction_id);
         """
     )
     _ensure_column(conn, "material_types", "sort_order", "INTEGER NOT NULL DEFAULT 0")
@@ -226,6 +313,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     )
     _ensure_column(conn, "operators", "pin_hash", "TEXT")
     _ensure_column(conn, "operators", "pin_updated_at", "TEXT")
+    _ensure_column(conn, "material_pack_links", "enabled", "INTEGER NOT NULL DEFAULT 1")
     conn.execute(
         """
         UPDATE transactions
@@ -463,6 +551,39 @@ def material_from_row(row: sqlite3.Row) -> MaterialType:
         active=bool(row["active"]),
         sort_order=int(row["sort_order"]),
         notes=row["notes"],
+    )
+
+
+def compliance_pack_from_row(row: sqlite3.Row) -> CompliancePack:
+    return CompliancePack(
+        id=row["id"],
+        pack_key=row["pack_key"],
+        display_name=row["display_name"],
+        jurisdiction=row["jurisdiction"],
+        version=row["version"],
+        description=row["description"],
+        source_notes=row["source_notes"],
+        enabled=bool(row["enabled"]),
+        built_in=bool(row["built_in"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def compliance_rule_from_row(row: sqlite3.Row) -> ComplianceRule:
+    return ComplianceRule(
+        id=row["id"],
+        pack_id=row["pack_id"],
+        rule_key=row["rule_key"],
+        display_name=row["display_name"],
+        rule_type=row["rule_type"],
+        severity=row["severity"],
+        config=json.loads(row["config_json"] or "{}"),
+        enabled=bool(row["enabled"]),
+        effective_start_date=row["effective_start_date"],
+        effective_end_date=row["effective_end_date"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )
 
 
@@ -828,12 +949,22 @@ def _validate_operator_role(role: str) -> None:
 
 def list_materials(conn: sqlite3.Connection, active_only: bool = True) -> list[MaterialType]:
     sql = "SELECT * FROM material_types"
-    params: tuple[object, ...] = ()
+    params: list[object] = []
     if active_only:
-        sql += " WHERE active = ?"
-        params = (1,)
+        sql += """
+            WHERE active = ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM material_pack_links mpl
+                  JOIN compliance_packs cp ON cp.id = mpl.pack_id
+                  WHERE mpl.material_type_id = material_types.id
+                    AND cp.enabled = 1
+                    AND mpl.enabled = 0
+              )
+        """
+        params.append(1)
     sql += " ORDER BY sort_order, report_grouping, display_name"
-    return [material_from_row(row) for row in conn.execute(sql, params)]
+    return [material_from_row(row) for row in conn.execute(sql, tuple(params))]
 
 
 def rate_from_row(row: sqlite3.Row) -> Rate:
@@ -1273,6 +1404,203 @@ def rate_overlaps(
     return False
 
 
+def list_compliance_packs(
+    conn: sqlite3.Connection, enabled_only: bool = False
+) -> list[CompliancePack]:
+    sql = "SELECT * FROM compliance_packs"
+    params: tuple[object, ...] = ()
+    if enabled_only:
+        sql += " WHERE enabled = ?"
+        params = (1,)
+    sql += " ORDER BY built_in DESC, jurisdiction, display_name"
+    return [compliance_pack_from_row(row) for row in conn.execute(sql, params)]
+
+
+def get_compliance_pack_by_key(conn: sqlite3.Connection, pack_key: str) -> CompliancePack:
+    row = conn.execute(
+        "SELECT * FROM compliance_packs WHERE pack_key = ?", (pack_key,)
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Unknown compliance pack: {pack_key}")
+    return compliance_pack_from_row(row)
+
+
+def list_compliance_rules(
+    conn: sqlite3.Connection,
+    pack_id: int | None = None,
+    *,
+    enabled_only: bool = False,
+) -> list[ComplianceRule]:
+    sql = "SELECT * FROM compliance_rules"
+    params: list[object] = []
+    where = []
+    if pack_id is not None:
+        where.append("pack_id = ?")
+        params.append(pack_id)
+    if enabled_only:
+        where.append("enabled = ?")
+        params.append(1)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY rule_type, display_name"
+    return [compliance_rule_from_row(row) for row in conn.execute(sql, tuple(params))]
+
+
+def set_compliance_pack_enabled(
+    conn: sqlite3.Connection,
+    pack_id: int,
+    enabled: bool,
+    *,
+    audit: bool = True,
+    operator: str = "manager",
+    audit_notes: str = "",
+) -> None:
+    with conn:
+        before = _compliance_pack_snapshot(conn, pack_id)
+        result = conn.execute(
+            """
+            UPDATE compliance_packs
+            SET enabled = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (1 if enabled else 0, pack_id),
+        )
+        if result.rowcount and audit:
+            add_audit_entry(
+                conn,
+                action_type=(
+                    "compliance_pack_enabled" if enabled else "compliance_pack_disabled"
+                ),
+                entity_type="compliance_pack",
+                entity_id=pack_id,
+                before_value=before,
+                after_value=_compliance_pack_snapshot(conn, pack_id),
+                operator=operator,
+                notes=audit_notes,
+            )
+    if result.rowcount == 0:
+        raise ValueError(f"Unknown compliance pack id: {pack_id}")
+
+
+def set_compliance_rule_enabled(
+    conn: sqlite3.Connection,
+    rule_id: int,
+    enabled: bool,
+    *,
+    audit: bool = True,
+    operator: str = "manager",
+    audit_notes: str = "",
+) -> None:
+    with conn:
+        before = _compliance_rule_snapshot(conn, rule_id)
+        result = conn.execute(
+            """
+            UPDATE compliance_rules
+            SET enabled = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (1 if enabled else 0, rule_id),
+        )
+        if result.rowcount and audit:
+            add_audit_entry(
+                conn,
+                action_type=(
+                    "compliance_rule_enabled" if enabled else "compliance_rule_disabled"
+                ),
+                entity_type="compliance_rule",
+                entity_id=rule_id,
+                before_value=before,
+                after_value=_compliance_rule_snapshot(conn, rule_id),
+                operator=operator,
+                notes=audit_notes,
+            )
+    if result.rowcount == 0:
+        raise ValueError(f"Unknown compliance rule id: {rule_id}")
+
+
+def list_material_pack_links(
+    conn: sqlite3.Connection, pack_id: int | None = None
+) -> list[sqlite3.Row]:
+    sql = """
+        SELECT
+            mpl.*,
+            cp.display_name AS pack_display_name,
+            cp.pack_key,
+            mt.display_name AS material_display_name,
+            mt.report_grouping,
+            mt.unit_type,
+            mt.active AS material_active
+        FROM material_pack_links mpl
+        JOIN compliance_packs cp ON cp.id = mpl.pack_id
+        JOIN material_types mt ON mt.id = mpl.material_type_id
+    """
+    params: tuple[object, ...] = ()
+    if pack_id is not None:
+        sql += " WHERE mpl.pack_id = ?"
+        params = (pack_id,)
+    sql += " ORDER BY cp.display_name, mt.sort_order, mt.display_name"
+    return list(conn.execute(sql, params))
+
+
+def set_material_pack_link_enabled(
+    conn: sqlite3.Connection,
+    link_id: int,
+    enabled: bool,
+    *,
+    audit: bool = True,
+    operator: str = "manager",
+    audit_notes: str = "",
+) -> None:
+    with conn:
+        before = _material_pack_link_snapshot(conn, link_id)
+        result = conn.execute(
+            """
+            UPDATE material_pack_links
+            SET enabled = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (1 if enabled else 0, link_id),
+        )
+        if result.rowcount and audit:
+            add_audit_entry(
+                conn,
+                action_type=(
+                    "material_pack_link_enabled"
+                    if enabled
+                    else "material_pack_link_disabled"
+                ),
+                entity_type="material_pack_link",
+                entity_id=link_id,
+                before_value=before,
+                after_value=_material_pack_link_snapshot(conn, link_id),
+                operator=operator,
+                notes=audit_notes,
+            )
+    if result.rowcount == 0:
+        raise ValueError(f"Unknown material pack link id: {link_id}")
+
+
+def _compliance_pack_snapshot(
+    conn: sqlite3.Connection, pack_id: int
+) -> dict[str, object] | None:
+    row = conn.execute("SELECT * FROM compliance_packs WHERE id = ?", (pack_id,)).fetchone()
+    return _row_to_dict(row)
+
+
+def _compliance_rule_snapshot(
+    conn: sqlite3.Connection, rule_id: int
+) -> dict[str, object] | None:
+    row = conn.execute("SELECT * FROM compliance_rules WHERE id = ?", (rule_id,)).fetchone()
+    return _row_to_dict(row)
+
+
+def _material_pack_link_snapshot(
+    conn: sqlite3.Connection, link_id: int
+) -> dict[str, object] | None:
+    row = conn.execute("SELECT * FROM material_pack_links WHERE id = ?", (link_id,)).fetchone()
+    return _row_to_dict(row)
+
+
 def _parse_date(value: str, field_name: str) -> date:
     try:
         return date.fromisoformat(value)
@@ -1291,6 +1619,16 @@ def create_transaction(
     payload: TransactionInput,
     created_at: datetime | None = None,
 ) -> str:
+    from app.compliance import (
+        ComplianceValidationError,
+        blocking_results,
+        receipt_disclosures_for_line_items,
+        save_transaction_rule_results,
+        validate_transaction,
+        warning_results,
+    )
+    from app.permissions import has_permission
+
     if not payload.line_items:
         raise ValueError("A transaction must include at least one line item.")
     if payload.operator_id is None:
@@ -1310,6 +1648,19 @@ def create_transaction(
     operator_initials_snapshot = operator_record.initials
     operator_name_snapshot = operator_record.display_name
     operator_verified_snapshot = bool(payload.operator_verified and operator_record.pin_set)
+    compliance_results = validate_transaction(conn, payload, created_at)
+    blockers = blocking_results(compliance_results)
+    if blockers:
+        raise ComplianceValidationError(blockers)
+    compliance_warnings = warning_results(compliance_results)
+    override_operator = None
+    override_reason = payload.compliance_warning_override_reason.strip()
+    if compliance_warnings and payload.compliance_override_operator_id is not None:
+        override_operator = get_operator(conn, payload.compliance_override_operator_id)
+        if not has_permission(override_operator, "override_compliance_warning"):
+            raise PermissionError("Selected operator cannot override compliance warnings.")
+        if not override_reason:
+            raise ValueError("Compliance warning override reason is required.")
     transaction_id = str(uuid4())
     line_rows: list[dict[str, object]] = []
     total_cents = 0
@@ -1385,6 +1736,7 @@ def create_transaction(
                 }
             )
 
+        disclosures = receipt_disclosures_for_line_items(conn, line_rows)
         receipt_text = build_receipt_copies_text(
             transaction={
                 "id": transaction_id,
@@ -1398,6 +1750,7 @@ def create_transaction(
                 "status": "active",
             },
             line_items=line_rows,
+            disclosures=disclosures,
         )
         conn.execute(
             """
@@ -1414,6 +1767,29 @@ def create_transaction(
             """,
             (transaction_id, receipt_text),
         )
+        save_transaction_rule_results(conn, transaction_id, compliance_results)
+        if compliance_warnings and override_operator is not None:
+            add_audit_entry(
+                conn,
+                action_type="compliance_warning_overridden",
+                entity_type="transaction",
+                entity_id=transaction_id,
+                before_value=[
+                    {
+                        "pack_key": result.pack_key,
+                        "rule_key": result.rule_key,
+                        "severity": result.severity,
+                        "message": result.message,
+                    }
+                    for result in compliance_warnings
+                ],
+                after_value={
+                    "override_operator": format_operator_label(override_operator),
+                    "reason": override_reason,
+                },
+                operator=format_operator_label(override_operator),
+                notes=override_reason,
+            )
 
     return transaction_id
 

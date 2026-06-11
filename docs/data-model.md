@@ -74,6 +74,71 @@ Immutable receipt/internal copy snapshots.
 
 Receipt snapshots contain customer and office copies, operator snapshot text, operator verification status when available, material/rate/subtotal lines, total payout, and FEET audit indicators. Voided receipt display is layered on at read/print time so the original snapshot is not mutated.
 
+## `compliance_packs`
+
+Configurable rule-pack headers.
+
+- `pack_key`: stable unique key such as `ca_crv`
+- `display_name`
+- `jurisdiction`
+- `version`
+- `description`
+- `source_notes`
+- `enabled`
+- `built_in`
+- `created_at`
+- `updated_at`
+
+The built-in California CRV Compliance Pack is seeded here. Built-in packs should be disabled rather than hard-deleted.
+
+## `compliance_rules`
+
+Rules belonging to a compliance pack.
+
+- `pack_id`
+- `rule_key`: unique within the pack
+- `display_name`
+- `rule_type`: `material_enablement`, `payout_value`, `daily_load_limit`, `count_payment_limit`, `receipt_disclosure`, `report_requirement`, `warning`, `blocking_validation`, or `audit_requirement`
+- `severity`: `info`, `warning`, or `block`
+- `config_json`
+- `enabled`
+- `effective_start_date`
+- `effective_end_date`
+- `created_at`
+- `updated_at`
+
+Rule configuration stays in JSON so future packs can add state-specific or material-specific settings without schema changes.
+
+## `material_pack_links`
+
+Links materials to compliance packs and captures which pack-linked materials this center uses.
+
+- `pack_id`
+- `material_type_id`
+- `required`
+- `enabled_by_default`
+- `enabled`
+- `notes`
+- `created_at`
+- `updated_at`
+
+If an enabled pack has a disabled material link, that material is hidden from new transaction input. Existing transaction history still uses stored line-item snapshots.
+
+## `transaction_rule_results`
+
+Saved compliance validation results for completed transactions.
+
+- `transaction_id`
+- `pack_key`
+- `rule_key`
+- `severity`
+- `result`: `passed`, `warning`, `blocked`, or `skipped`
+- `message`
+- `details_json`
+- `created_at`
+
+Warnings that are overridden are also logged in `audit_log` with the override reason and manager/admin operator snapshot.
+
 ## `feet_closeout_reports`
 
 Immutable FEET-inspired end-of-day closeout snapshots.
@@ -147,13 +212,13 @@ Append-only admin/config change history.
 - `timestamp`
 - `operator`
 - `action_type`
-- `entity_type`: `material_type`, `rate`, `operator`, `settings`, `transaction`, or `feet_closeout_report`
+- `entity_type`: `material_type`, `rate`, `operator`, `settings`, `transaction`, `feet_closeout_report`, `compliance_pack`, `compliance_rule`, or `material_pack_link`
 - `entity_id`
 - `before_value`
 - `after_value`
 - `notes`
 
-Logged actions include operator creation/edit/deactivation/reactivation, operator PIN set/change/clear, operator PIN verification attempts when recorded by the UI, operator PIN enforcement setting changes, transaction void attempted/completed/failed events, material creation/edit/deactivation/reactivation, rate creation, rate replacement/end-dating, manager PIN creation/change, audit log export, database backup creation, and database restore attempted/completed/failed events.
+Logged actions include operator creation/edit/deactivation/reactivation, operator PIN set/change/clear, operator PIN verification attempts when recorded by the UI, operator PIN enforcement setting changes, transaction void attempted/completed/failed events, compliance pack/rule/material-link toggles, compliance warning overrides, material creation/edit/deactivation/reactivation, rate creation, rate replacement/end-dating, manager PIN creation/change, audit log export, database backup creation, and database restore attempted/completed/failed events.
 
 FEET closeout completion is logged with the report date, total paid, void count, and selected operator label. The full report snapshot lives in `feet_closeout_reports`.
 
@@ -188,3 +253,7 @@ Backup files are SQLite database copies. They contain transactions, receipt snap
 - Do not write PIN values or PIN hashes to audit entries.
 - Validate expected tables before restore.
 - Create a pre-restore backup before replacing local database contents.
+- Treat compliance packs as configurable support, not certification.
+- Store compliance rule results separately from transactions.
+- Preserve receipt/report disclosure text used at the time of transaction or closeout.
+- Disable built-in compliance packs/rules instead of hard-deleting them.

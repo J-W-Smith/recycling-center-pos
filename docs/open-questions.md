@@ -2,6 +2,16 @@
 
 - Exact material categories accepted?
 - CRV only, scrap only, or both?
+- Which Compliance Packs apply to this center?
+- Should the California CRV Compliance Pack be enabled for all workstations?
+- Which pack-linked materials should be selected for this specific location?
+- Are daily load limits warning-only, blocking, or manager override?
+- Are count-payment limits warning-only, blocking, or manager override?
+- Who can override compliance-pack warnings?
+- What override reasons should be allowed or required?
+- How often should compliance-pack rules be reviewed against current regulations?
+- Who approves compliance-pack rule changes?
+- Do custom business-specific rule packs need to be added?
 - Current payout rates?
 - Do rates change daily?
 - Who is allowed to change material and rate settings?

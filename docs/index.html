@@ -38,6 +38,7 @@
       <button class="tab" data-target="voids">Voids</button>
       <button class="tab" data-target="daily-report">Daily Report</button>
       <button class="tab" data-target="admin">Admin Settings</button>
+      <button class="tab" data-target="compliance-packs">Compliance Packs</button>
       <button class="tab" data-target="operators">Operators</button>
       <button class="tab" data-target="audit">Audit Log</button>
       <button class="tab" data-target="backup">Backup/Restore</button>
@@ -72,6 +73,8 @@
             <li>audit log</li>
             <li>backup/restore</li>
             <li>controlled void workflow</li>
+            <li>compliance packs</li>
+            <li>rule-pack validation</li>
             <li>daily reports</li>
           </ul>
         </div>
@@ -255,6 +258,35 @@ Print two copies: customer copy and office copy.
           <article class="panel"><h3>Effective-Dated Rates</h3><p>Rates keep start/end dates so old receipts remain explainable after price changes.</p></article>
           <article class="panel"><h3>Role Permissions</h3><p>Managers/admins can access protected settings after manager PIN confirmation.</p></article>
           <article class="panel"><h3>Operator PIN Settings</h3><p>Optional verification settings can require operator PINs for transactions or admin actions.</p></article>
+        </div>
+      </section>
+
+      <section id="compliance-packs" class="screen">
+        <div class="screen-title">
+          <h2>Compliance Packs</h2>
+          <span class="badge">Sample rule-pack view</span>
+        </div>
+        <div class="notice">
+          Compliance packs provide configurable support and audit-friendly warnings. This static demo uses fake/sample data and is not compliance-certified.
+        </div>
+        <div class="two-column">
+          <div class="panel">
+            <h3>California CRV Compliance Pack</h3>
+            <table>
+              <thead><tr><th>Rule</th><th>Status</th><th>Severity</th></tr></thead>
+              <tbody id="compliance-rules"></tbody>
+            </table>
+          </div>
+          <div class="panel">
+            <h3>Material / Rule Checklist</h3>
+            <ul class="check-list" id="compliance-materials"></ul>
+          </div>
+        </div>
+        <div class="process-grid">
+          <article class="panel"><h3>Daily Load Warning</h3><p>Sample warning: Aluminum CRV by weight would exceed the configured 100 lb daily limit.</p></article>
+          <article class="panel"><h3>Count-Payment Warning</h3><p>Sample warning: Per-container CRV payment request exceeds the configured per-material count threshold.</p></article>
+          <article class="panel"><h3>Receipt Disclosure</h3><p>California CRV Compliance Pack enabled. Payout based on configured material/rate rules. Not a compliance certification.</p></article>
+          <article class="panel"><h3>Report Disclosure</h3><p>Review daily load limits, count-payment requests, and recordkeeping requirements before production use.</p></article>
         </div>
       </section>
 
